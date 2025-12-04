@@ -50,6 +50,7 @@ class MobizonService:
             clean_phone = phone.replace('+', '')
             
             # Mobizon API parameters - все в query string
+            # Согласно документации: https://mobizon.kz/help/api-docs/message
             params = {
                 "apiKey": settings.MOBIZON_API_KEY,
                 "recipient": clean_phone,
@@ -57,13 +58,17 @@ class MobizonService:
                 "output": "json",  # Explicitly request JSON response
             }
             
+            # Добавляем подпись отправителя если указана
+            if originator:
+                params["from"] = originator
+            
             logger.info(f"📡 [MOBIZON] Request URL: {endpoint}")
-            logger.info(f"📡 [MOBIZON] Params: recipient={clean_phone}, text_length={len(message)}, apiKey length={len(settings.MOBIZON_API_KEY)}")
+            logger.info(f"📡 [MOBIZON] Params: {params}")
             
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.get(endpoint, params=params)
+                logger.info(f"📡 [MOBIZON] HTTP Status: {response.status_code}")
                 response_data = response.json()
-                
                 logger.info(f"📡 [MOBIZON] Response: {response_data}")
                 
                 # Mobizon response format:
@@ -112,19 +117,21 @@ class MobizonService:
     async def check_balance(cls) -> Optional[float]:
         """
         Check Mobizon account balance
+        Документация: https://mobizon.kz/help/api-docs/sms-api
         
         Returns:
             Balance amount or None if error
         """
         try:
-            endpoint = f"{cls.BASE_URL}/user/getOwnBalance"
+            endpoint = f"{cls.BASE_URL}/user/getownbalance"
             
             params = {
                 "apiKey": settings.MOBIZON_API_KEY,
+                "output": "json",
             }
             
             async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.post(endpoint, params=params)
+                response = await client.get(endpoint, params=params)
                 response_data = response.json()
                 
                 if response_data.get("code") == 0:

@@ -37,7 +37,16 @@ class TaskAIService:
    - "high" - высокий (важно сделать скоро)
    - "urgent" - срочно (нужно сделать сегодня/сейчас)
 
-3. **category** (категория, если применимо):
+3. **suggested_time** (рекомендуемое время выполнения в формате HH:MM):
+   - Для ежедневных задач предлагай конкретное время
+   - Примеры: "08:00" (утренние задачи), "12:00" (обеденные), "20:00" (вечерние)
+   - Для weekly/monthly/long_term - null
+
+4. **needs_deadline** (требуется ли строгий дедлайн):
+   - true - если задача имеет конкретный срок (оплата счетов, встречи, дедлайны)
+   - false - для регулярных задач без строгого срока (чистка зубов, зарядка)
+
+5. **category** (категория, если применимо):
    - "movies" - фильмы, сериалы
    - "books" - книги, чтение
    - "places" - места для посещения
@@ -47,17 +56,19 @@ class TaskAIService:
    - null - если не подходит ни одна категория
 
 Примеры:
-- "Почистить зубы" → daily, medium, null
-- "Посмотреть Начало" → weekly, medium, movies
-- "Купить молоко" → daily, high, products
-- "Выучить английский" → long_term, high, ideas
-- "Позвонить маме" → daily, high, null
-- "Убраться в квартире" → weekly, medium, null
+- "Почистить зубы" → daily, medium, "08:00", false, null
+- "Посмотреть Начало" → weekly, medium, null, false, movies
+- "Купить молоко" → daily, high, "18:00", false, products
+- "Оплатить интернет" → monthly, high, "10:00", true, null
+- "Позвонить маме" → daily, high, "19:00", false, null
+- "Убраться в квартире" → weekly, medium, null, false, null
 
 Верни ТОЛЬКО валидный JSON без дополнительного текста:
 {
   "time_scope": "daily",
   "priority": "medium",
+  "suggested_time": "08:00",
+  "needs_deadline": false,
   "category": "movies",
   "confidence": 0.95,
   "reasoning": "Краткое объяснение"
@@ -82,6 +93,8 @@ class TaskAIService:
             return {
                 "time_scope": result.get("time_scope", "daily"),
                 "priority": result.get("priority", "medium"),
+                "suggested_time": result.get("suggested_time"),
+                "needs_deadline": result.get("needs_deadline", False),
                 "category": result.get("category"),
                 "confidence": result.get("confidence", 0.8),
                 "reasoning": result.get("reasoning", "AI-анализ задачи")
@@ -93,6 +106,8 @@ class TaskAIService:
             return {
                 "time_scope": "daily",
                 "priority": "medium",
+                "suggested_time": None,
+                "needs_deadline": False,
                 "category": None,
                 "confidence": 0.5,
                 "reasoning": "Не удалось проанализировать (используются значения по умолчанию)"

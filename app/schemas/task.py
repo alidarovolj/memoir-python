@@ -78,3 +78,14 @@ class TaskListResponse(BaseModel):
     page: int = 1
     page_size: int = 50
 
+
+class TaskAnalyzeResponse(BaseModel):
+    """Schema for AI task analysis response"""
+    time_scope: TimeScope
+    priority: TaskPriority
+    suggested_time: Optional[str] = None  # Format: "HH:MM"
+    needs_deadline: bool = False
+    category: Optional[str] = None
+    confidence: float
+    reasoning: str
+

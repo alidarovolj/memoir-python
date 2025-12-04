@@ -18,6 +18,8 @@ class TaskAnalysisResponse(BaseModel):
     """Response with AI analysis"""
     time_scope: str
     priority: str
+    suggested_time: str | None = None  # Format: "HH:MM"
+    needs_deadline: bool = False
     category: str | None
     confidence: float
     reasoning: str
