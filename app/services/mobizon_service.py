@@ -43,21 +43,25 @@ class MobizonService:
                     "message": "SMS sent (test mode)"
                 }
             
-            # Mobizon API endpoint
-            endpoint = f"{cls.BASE_URL}/message/sendSmsMessage"
+            # Mobizon API endpoint: https://api.mobizon.kz/service/message/sendsmsmessage
+            endpoint = f"{cls.BASE_URL}/message/sendsmsmessage"
             
             # Clean phone number (remove + if present)
             clean_phone = phone.replace('+', '')
             
+            # Mobizon API parameters - все в query string
             params = {
                 "apiKey": settings.MOBIZON_API_KEY,
                 "recipient": clean_phone,
                 "text": message,
-                "from": originator,  # Sender name
+                "output": "json",  # Explicitly request JSON response
             }
             
+            logger.info(f"📡 [MOBIZON] Request URL: {endpoint}")
+            logger.info(f"📡 [MOBIZON] Params: recipient={clean_phone}, text_length={len(message)}, apiKey length={len(settings.MOBIZON_API_KEY)}")
+            
             async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(endpoint, params=params)
+                response = await client.get(endpoint, params=params)
                 response_data = response.json()
                 
                 logger.info(f"📡 [MOBIZON] Response: {response_data}")

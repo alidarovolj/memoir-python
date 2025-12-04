@@ -1,4 +1,4 @@
-"""SMS-based authentication endpoints using SMS Traffic"""
+"""SMS-based authentication endpoints using Mobizon"""
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel, Field
@@ -7,7 +7,7 @@ import logging
 from app.db.session import get_db
 from app.schemas.user import User
 from app.schemas.token import TokenWithUser
-from app.services.sms_traffic_service import SMSTrafficService
+from app.services.mobizon_service import MobizonService
 from app.services.sms_verification_service import SMSVerificationService
 from app.services.auth_service import AuthService
 from app.core.exceptions import AuthenticationError
@@ -45,10 +45,10 @@ async def send_verification_code(
         # Generate and store code
         code = await SMSVerificationService.generate_and_store_code(phone)
         
-        # Send SMS via SMS Traffic
+        # Send SMS via Mobizon
         message = f"Ваш код подтверждения Memoir: {code}\n\nКод действителен 5 минут."
         
-        result = await SMSTrafficService.send_sms(
+        result = await MobizonService.send_sms(
             phone=phone,
             message=message,
             originator="Memoir"
