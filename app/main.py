@@ -10,6 +10,16 @@ app = FastAPI(
     version="0.1.0",
 )
 
+# Firebase будет инициализирован позже для Push Notifications (FCM)
+# @app.on_event("startup")
+# async def startup_event():
+#     """Initialize Firebase for Push Notifications"""
+#     from app.services.firebase_service import FirebaseService
+#     try:
+#         FirebaseService.initialize_app()
+#     except Exception as e:
+#         print(f"⚠️ Warning: Firebase initialization failed: {e}")
+
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,

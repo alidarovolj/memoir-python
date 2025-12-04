@@ -1,0 +1,149 @@
+"""SMS verification code service using Redis"""
+import random
+import redis.asyncio as redis
+from typing import Optional
+import logging
+from app.core.config import settings
+
+logger = logging.getLogger(__name__)
+
+
+class SMSVerificationService:
+    """Service for generating and verifying SMS codes"""
+    
+    # Redis connection
+    _redis: Optional[redis.Redis] = None
+    
+    # Code settings
+    CODE_LENGTH = 6
+    CODE_TTL = 300  # 5 minutes
+    MAX_ATTEMPTS = 3
+    
+    @classmethod
+    async def _get_redis(cls) -> redis.Redis:
+        """Get or create Redis connection"""
+        if cls._redis is None:
+            cls._redis = await redis.from_url(
+                settings.REDIS_URL,
+                encoding="utf-8",
+                decode_responses=True
+            )
+        return cls._redis
+    
+    @classmethod
+    def _generate_code(cls) -> str:
+        """Generate random 6-digit code"""
+        return ''.join([str(random.randint(0, 9)) for _ in range(cls.CODE_LENGTH)])
+    
+    @classmethod
+    def _get_redis_key(cls, phone: str) -> str:
+        """Get Redis key for phone number"""
+        return f"sms_code:{phone}"
+    
+    @classmethod
+    def _get_attempts_key(cls, phone: str) -> str:
+        """Get Redis key for attempts counter"""
+        return f"sms_attempts:{phone}"
+    
+    @classmethod
+    async def generate_and_store_code(cls, phone: str) -> str:
+        """
+        Generate new verification code and store in Redis
+        
+        Args:
+            phone: Phone number
+            
+        Returns:
+            Generated code
+        """
+        code = cls._generate_code()
+        r = await cls._get_redis()
+        
+        # Store code with TTL
+        key = cls._get_redis_key(phone)
+        await r.setex(key, cls.CODE_TTL, code)
+        
+        # Reset attempts counter
+        attempts_key = cls._get_attempts_key(phone)
+        await r.delete(attempts_key)
+        
+        logger.info(f"🔑 [SMS_VERIFY] Generated code for {phone} (TTL: {cls.CODE_TTL}s)")
+        
+        return code
+    
+    @classmethod
+    async def verify_code(cls, phone: str, code: str) -> bool:
+        """
+        Verify SMS code
+        
+        Args:
+            phone: Phone number
+            code: Code to verify
+            
+        Returns:
+            True if code is valid, False otherwise
+        """
+        r = await cls._get_redis()
+        
+        # Check attempts
+        attempts_key = cls._get_attempts_key(phone)
+        attempts = await r.get(attempts_key)
+        attempts = int(attempts) if attempts else 0
+        
+        if attempts >= cls.MAX_ATTEMPTS:
+            logger.warning(f"⚠️ [SMS_VERIFY] Max attempts reached for {phone}")
+            return False
+        
+        # Get stored code
+        key = cls._get_redis_key(phone)
+        stored_code = await r.get(key)
+        
+        if not stored_code:
+            logger.warning(f"⚠️ [SMS_VERIFY] No code found for {phone} (expired or not sent)")
+            return False
+        
+        # Verify code
+        if code == stored_code:
+            logger.info(f"✅ [SMS_VERIFY] Code verified for {phone}")
+            
+            # Delete code after successful verification
+            await r.delete(key)
+            await r.delete(attempts_key)
+            
+            return True
+        else:
+            # Increment attempts
+            await r.incr(attempts_key)
+            await r.expire(attempts_key, cls.CODE_TTL)
+            
+            logger.warning(f"❌ [SMS_VERIFY] Invalid code for {phone} (attempt {attempts + 1}/{cls.MAX_ATTEMPTS})")
+            
+            return False
+    
+    @classmethod
+    async def get_remaining_attempts(cls, phone: str) -> int:
+        """Get remaining verification attempts"""
+        r = await cls._get_redis()
+        attempts_key = cls._get_attempts_key(phone)
+        attempts = await r.get(attempts_key)
+        attempts = int(attempts) if attempts else 0
+        
+        return max(0, cls.MAX_ATTEMPTS - attempts)
+    
+    @classmethod
+    async def is_code_expired(cls, phone: str) -> bool:
+        """Check if code exists for phone"""
+        r = await cls._get_redis()
+        key = cls._get_redis_key(phone)
+        exists = await r.exists(key)
+        return exists == 0
+    
+    @classmethod
+    async def get_code_ttl(cls, phone: str) -> Optional[int]:
+        """Get remaining TTL for code in seconds"""
+        r = await cls._get_redis()
+        key = cls._get_redis_key(phone)
+        ttl = await r.ttl(key)
+        
+        return ttl if ttl > 0 else None
+

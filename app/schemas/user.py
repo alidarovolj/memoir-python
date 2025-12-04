@@ -7,27 +7,28 @@ from pydantic import BaseModel, EmailStr, Field, ConfigDict
 
 class UserBase(BaseModel):
     """Base user schema"""
-    email: EmailStr
-    username: str = Field(..., min_length=3, max_length=100)
+    phone_number: str = Field(..., min_length=10, max_length=20)
+    username: Optional[str] = Field(None, min_length=3, max_length=100)
+    email: Optional[EmailStr] = None
 
 
-class UserCreate(BaseModel):
-    """User creation schema"""
-    email: EmailStr
-    password: str = Field(..., min_length=6, max_length=100)
-    username: Optional[str] = None  # Опционально, если не указано - генерируется из email
+class UserCreatePhone(BaseModel):
+    """User creation schema via Phone + Firebase"""
+    phone_number: str = Field(..., min_length=10, max_length=20)
+    firebase_token: str = Field(..., min_length=10)  # ID token from Firebase
+    username: Optional[str] = None
 
 
 class UserUpdate(BaseModel):
     """User update schema"""
-    email: Optional[EmailStr] = None
     username: Optional[str] = Field(None, min_length=3, max_length=100)
-    password: Optional[str] = Field(None, min_length=8, max_length=100)
+    email: Optional[EmailStr] = None
 
 
 class UserInDB(UserBase):
     """User in database schema"""
     id: UUID
+    firebase_uid: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

@@ -12,9 +12,13 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    email = Column(String(255), unique=True, nullable=False, index=True)
-    username = Column(String(100), unique=True, nullable=False, index=True)
-    hashed_password = Column(String(255), nullable=False)
+    phone_number = Column(String(20), unique=True, nullable=False, index=True)
+    firebase_uid = Column(String(128), unique=True, nullable=True, index=True)
+    username = Column(String(100), unique=True, nullable=True, index=True)
+    
+    # Keep email optional for future OAuth support
+    email = Column(String(255), unique=True, nullable=True, index=True)
+    
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -23,5 +27,5 @@ class User(Base):
     tasks = relationship("Task", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self):
-        return f"<User {self.email}>"
+        return f"<User {self.phone_number}>"
 
