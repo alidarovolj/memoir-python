@@ -39,6 +39,7 @@ class MemoryInDB(MemoryBase):
     id: UUID
     user_id: UUID
     category_id: Optional[UUID]
+    related_task_id: Optional[UUID] = None
     image_url: Optional[str] = None
     backdrop_url: Optional[str] = None
     memory_metadata: Dict[str, Any] = {}

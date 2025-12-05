@@ -1,13 +1,14 @@
 """Business logic for Task operations"""
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_
 from sqlalchemy.orm import joinedload
 
 from app.models.task import Task, TaskStatus, TaskPriority, TimeScope
-from app.schemas.task import TaskCreate, TaskUpdate
+from app.models.memory import Memory, SourceType
+from app.schemas.task import TaskCreate, TaskUpdate, TaskToMemoryConversion
 
 
 class TaskService:
@@ -94,6 +95,7 @@ class TaskService:
             title=task_data.title,
             description=task_data.description,
             due_date=task_data.due_date,
+            scheduled_time=task_data.scheduled_time,
             status=task_data.status,
             priority=task_data.priority,
             time_scope=task_data.time_scope,
@@ -188,4 +190,265 @@ class TaskService:
             .order_by(Task.due_date.asc())
         )
         return result.scalars().all()
+
+    @staticmethod
+    async def convert_to_memory(
+        db: AsyncSession,
+        task_id: UUID,
+        user_id: UUID,
+        conversion_data: TaskToMemoryConversion,
+    ) -> Optional[Memory]:
+        """
+        Convert a completed task to a memory
+        
+        Steps:
+        1. Get task and verify it's completed
+        2. Generate memory title (convert future tense to past)
+        3. Create memory with task data + additional notes
+        4. Link memory to task
+        5. AI will process memory in background (classification, embeddings)
+        
+        Examples:
+        - "Посмотреть Начало" → "Посмотрел Начало"
+        - "Прочитать 1984" → "Прочитал 1984"
+        - "Купить молоко" → "Купил молоко"
+        """
+        # Get task
+        task = await TaskService.get_task_by_id(db, task_id, user_id)
+        if not task:
+            return None
+        
+        # Verify task is completed
+        if task.status != TaskStatus.completed:
+            return None
+        
+        # Generate memory title (simple past tense conversion)
+        memory_title = TaskService._convert_to_past_tense(task.title)
+        
+        # Build memory content
+        memory_content = task.description or ""
+        
+        # Add additional content from conversion_data
+        if conversion_data.content:
+            if memory_content:
+                memory_content += f"\n\n{conversion_data.content}"
+            else:
+                memory_content = conversion_data.content
+        
+        # Add notes if provided
+        if conversion_data.notes:
+            memory_content += f"\n\n📝 Заметки: {conversion_data.notes}"
+        
+        # Add rating if provided
+        if conversion_data.rating is not None:
+            memory_content += f"\n\n⭐ Оценка: {conversion_data.rating}/10"
+        
+        # If no content at all, use task title
+        if not memory_content:
+            memory_content = f"Выполнено: {memory_title}"
+        
+        # Build memory metadata
+        memory_metadata = {}
+        if conversion_data.rating:
+            memory_metadata['rating'] = conversion_data.rating
+        if task.completed_at:
+            memory_metadata['completed_at'] = task.completed_at.isoformat()
+        
+        # Create memory
+        memory = Memory(
+            user_id=user_id,
+            category_id=task.category_id,
+            related_task_id=task.id,
+            title=memory_title,
+            content=memory_content,
+            source_type=SourceType.text,
+            image_url=conversion_data.image_url,
+            backdrop_url=conversion_data.backdrop_url,
+            memory_metadata=memory_metadata,
+        )
+        
+        db.add(memory)
+        await db.commit()
+        await db.refresh(memory)
+        
+        # Note: AI processing (classification, embeddings) will be handled by
+        # background tasks or celery workers in production
+        
+        return memory
+    
+    @staticmethod
+    def _convert_to_past_tense(title: str) -> str:
+        """
+        Simple conversion from future/imperative to past tense (Russian)
+        This is a basic implementation - can be improved with NLP
+        """
+        # Common patterns for Russian verbs
+        replacements = {
+            'Посмотреть': 'Посмотрел',
+            'Прочитать': 'Прочитал',
+            'Купить': 'Купил',
+            'Сходить': 'Сходил',
+            'Посетить': 'Посетил',
+            'Написать': 'Написал',
+            'Сделать': 'Сделал',
+            'Позвонить': 'Позвонил',
+            'Встретиться': 'Встретился',
+            'Приготовить': 'Приготовил',
+            'Убрать': 'Убрал',
+            'Помыть': 'Помыл',
+            'Почистить': 'Почистил',
+            'Отправить': 'Отправил',
+            'Забрать': 'Забрал',
+            'посмотреть': 'посмотрел',
+            'прочитать': 'прочитал',
+            'купить': 'купил',
+            'сходить': 'сходил',
+            'посетить': 'посетил',
+            'написать': 'написал',
+            'сделать': 'сделал',
+            'позвонить': 'позвонил',
+            'встретиться': 'встретился',
+            'приготовить': 'приготовил',
+            'убрать': 'убрал',
+            'помыть': 'помыл',
+            'почистить': 'почистил',
+            'отправить': 'отправил',
+            'забрать': 'забрал',
+        }
+        
+        result = title
+        for future, past in replacements.items():
+            result = result.replace(future, past)
+        
+        return result
+
+    @staticmethod
+    async def generate_recurring_instances(
+        db: AsyncSession,
+        task_id: UUID,
+        user_id: UUID,
+        days_ahead: int = 7,
+    ) -> List[Task]:
+        """
+        Generate recurring task instances for the next N days
+        
+        Args:
+            task_id: ID of the parent recurring task
+            user_id: User ID for verification
+            days_ahead: Number of days to generate instances for (default 7)
+            
+        Returns:
+            List of created task instances
+        """
+        # Get parent task
+        parent_task = await TaskService.get_task_by_id(db, task_id, user_id)
+        if not parent_task:
+            return []
+        
+        # Verify it's a recurring task
+        if not parent_task.is_recurring or not parent_task.recurrence_rule:
+            return []
+        
+        # Parse recurrence rule
+        dates = TaskService._parse_recurrence_rule(
+            parent_task.recurrence_rule,
+            days_ahead
+        )
+        
+        # Create instances
+        instances = []
+        for date in dates:
+            # Check if instance already exists for this date
+            existing_query = select(Task).where(
+                and_(
+                    Task.parent_task_id == parent_task.id,
+                    Task.due_date >= datetime(date.year, date.month, date.day, 0, 0),
+                    Task.due_date < datetime(date.year, date.month, date.day, 23, 59)
+                )
+            )
+            existing_result = await db.execute(existing_query)
+            if existing_result.scalar_one_or_none():
+                continue  # Skip if instance already exists
+            
+            # Create new instance
+            instance = Task(
+                user_id=user_id,
+                parent_task_id=parent_task.id,
+                title=parent_task.title,
+                description=parent_task.description,
+                due_date=date,
+                scheduled_time=parent_task.scheduled_time,
+                status=TaskStatus.pending,
+                priority=parent_task.priority,
+                time_scope=parent_task.time_scope,
+                category_id=parent_task.category_id,
+                tags=parent_task.tags,
+                is_recurring=False,  # Instances are not recurring themselves
+            )
+            
+            db.add(instance)
+            instances.append(instance)
+        
+        if instances:
+            await db.commit()
+            for instance in instances:
+                await db.refresh(instance)
+        
+        return instances
+    
+    @staticmethod
+    def _parse_recurrence_rule(recurrence_rule: str, days_ahead: int) -> List[datetime]:
+        """
+        Parse RRULE and generate dates
+        
+        Supports:
+        - FREQ=DAILY
+        - FREQ=WEEKLY
+        - FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR (weekdays)
+        - FREQ=MONTHLY
+        
+        Args:
+            recurrence_rule: RRULE format string
+            days_ahead: Number of days to generate
+            
+        Returns:
+            List of datetime objects
+        """
+        dates = []
+        today = datetime.now().replace(hour=23, minute=59, second=0, microsecond=0)
+        
+        if "FREQ=DAILY" in recurrence_rule:
+            # Daily: every day
+            for i in range(days_ahead):
+                dates.append(today + timedelta(days=i))
+        
+        elif "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR" in recurrence_rule:
+            # Weekdays: Monday to Friday
+            for i in range(days_ahead * 2):  # Check more days to cover weekdays
+                date = today + timedelta(days=i)
+                if date.weekday() < 5:  # 0-4 are Mon-Fri
+                    dates.append(date)
+                if len(dates) >= days_ahead:
+                    break
+        
+        elif "FREQ=WEEKLY" in recurrence_rule:
+            # Weekly: same day each week
+            for i in range(4):  # 4 weeks ahead
+                dates.append(today + timedelta(weeks=i))
+        
+        elif "FREQ=MONTHLY" in recurrence_rule:
+            # Monthly: same day each month
+            for i in range(3):  # 3 months ahead
+                try:
+                    month = today.month + i
+                    year = today.year
+                    while month > 12:
+                        month -= 12
+                        year += 1
+                    dates.append(today.replace(year=year, month=month))
+                except ValueError:
+                    # Handle edge case like Feb 31 -> Feb 28
+                    pass
+        
+        return dates
 

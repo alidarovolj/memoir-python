@@ -23,6 +23,7 @@ class Memory(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     category_id = Column(UUID(as_uuid=True), ForeignKey("categories.id"), nullable=True, index=True)
+    related_task_id = Column(UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True)  # Link to task if created from task
     
     title = Column(String(500), nullable=False)
     content = Column(Text, nullable=False)
@@ -42,6 +43,7 @@ class Memory(Base):
     # Relationships
     user = relationship("User", back_populates="memories")
     category = relationship("Category", back_populates="memories")
+    related_task = relationship("Task", foreign_keys="[Memory.related_task_id]")
     embedding = relationship("Embedding", back_populates="memory", uselist=False, cascade="all, delete-orphan")
 
     def __repr__(self):

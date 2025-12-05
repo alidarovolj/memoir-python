@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     CELERY_BROKER_URL: str
     CELERY_RESULT_BACKEND: str
     
+    # Firebase Cloud Messaging
+    FIREBASE_CREDENTIALS_PATH: str = ""  # Path to Firebase service account JSON file
+    
     # CORS
     CORS_ORIGINS: str = "http://localhost:3000,http://localhost:8080"
     

@@ -49,25 +49,40 @@ class MobizonService:
             # Clean phone number (remove + if present)
             clean_phone = phone.replace('+', '')
             
-            # Mobizon API parameters - все в query string
+            # Mobizon API parameters
             # Согласно документации: https://mobizon.kz/help/api-docs/message
-            params = {
-                "apiKey": settings.MOBIZON_API_KEY,
+            # Используем POST запрос с form data
+            data = {
                 "recipient": clean_phone,
                 "text": message,
-                "output": "json",  # Explicitly request JSON response
             }
             
             # Добавляем подпись отправителя если указана
-            if originator:
-                params["from"] = originator
+            # Note: Alpha-name must be pre-registered in Mobizon
+            if originator and originator.strip():
+                data["from"] = originator
+            
+            # API ключ и output в query string
+            params = {
+                "apiKey": settings.MOBIZON_API_KEY,
+                "output": "json",
+            }
             
             logger.info(f"📡 [MOBIZON] Request URL: {endpoint}")
-            logger.info(f"📡 [MOBIZON] Params: {params}")
+            logger.info(f"📡 [MOBIZON] Phone: {clean_phone}, Text length: {len(message)}")
+            logger.info(f"📡 [MOBIZON] Message text: {message}")
+            logger.info(f"📡 [MOBIZON] Has originator: {bool(data.get('from'))}")
             
             async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.get(endpoint, params=params)
+                # Log the params (without API key for security)
+                params_copy = params.copy()
+                params_copy['apiKey'] = '***'
+                logger.info(f"📡 [MOBIZON] Query params: {params_copy}")
+                logger.info(f"📡 [MOBIZON] POST data: {data}")
+                
+                response = await client.post(endpoint, params=params, data=data)
                 logger.info(f"📡 [MOBIZON] HTTP Status: {response.status_code}")
+                logger.info(f"📡 [MOBIZON] Response URL: {response.url}")
                 response_data = response.json()
                 logger.info(f"📡 [MOBIZON] Response: {response_data}")
                 

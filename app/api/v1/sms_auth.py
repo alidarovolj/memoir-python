@@ -48,10 +48,12 @@ async def send_verification_code(
         # Send SMS via Mobizon
         message = f"Ваш код подтверждения Memoir: {code}\n\nКод действителен 5 минут."
         
+        # Note: originator (alpha-name) must be registered in Mobizon first
+        # Using empty string to send from default number
         result = await MobizonService.send_sms(
             phone=phone,
             message=message,
-            originator="Memoir"
+            originator=""  # Empty = send from default number
         )
         
         if not result.get("success"):
@@ -186,4 +188,35 @@ async def resend_verification_code(
     """
     logger.info(f"🔄 [SMS_AUTH] Resend code request for: {request.phone_number}")
     return await send_verification_code(request, db)
+
+
+@router.get("/check-balance", status_code=status.HTTP_200_OK)
+async def check_mobizon_balance():
+    """
+    Check Mobizon account balance
+    
+    Useful for testing and monitoring SMS service availability
+    """
+    try:
+        balance = await MobizonService.check_balance()
+        
+        if balance is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to check balance. Check API key."
+            )
+        
+        return {
+            "success": True,
+            "balance": balance,
+            "currency": "KZT",
+            "status": "SMS service is operational"
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ [SMS_AUTH] Balance check error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to check SMS service balance"
+        )
 

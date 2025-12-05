@@ -1,10 +1,13 @@
 """Pydantic schemas for Task"""
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, TYPE_CHECKING
 from uuid import UUID
 from pydantic import BaseModel, Field
 
 from app.models.task import TaskStatus, TaskPriority, TimeScope
+
+if TYPE_CHECKING:
+    from app.schemas.subtask import SubtaskInDB
 
 
 class TaskBase(BaseModel):
@@ -12,12 +15,16 @@ class TaskBase(BaseModel):
     title: str = Field(..., max_length=500)
     description: Optional[str] = None
     due_date: Optional[datetime] = None
+    scheduled_time: Optional[str] = Field(None, max_length=5, pattern=r"^\d{2}:\d{2}$")  # Format: "HH:MM"
     status: TaskStatus = TaskStatus.pending
     priority: TaskPriority = TaskPriority.medium
     time_scope: TimeScope = TimeScope.daily
     category_id: Optional[UUID] = None
     related_memory_id: Optional[UUID] = None
     tags: Optional[List[str]] = None
+    is_recurring: bool = False
+    recurrence_rule: Optional[str] = None  # RRULE format (RFC 5545)
+    parent_task_id: Optional[UUID] = None  # For recurring instances
 
 
 class TaskCreate(TaskBase):
@@ -30,6 +37,7 @@ class TaskUpdate(BaseModel):
     title: Optional[str] = Field(None, max_length=500)
     description: Optional[str] = None
     due_date: Optional[datetime] = None
+    scheduled_time: Optional[str] = Field(None, max_length=5, pattern=r"^\d{2}:\d{2}$")
     status: Optional[TaskStatus] = None
     priority: Optional[TaskPriority] = None
     time_scope: Optional[TimeScope] = None
@@ -55,6 +63,7 @@ class TaskInDB(TaskBase):
 class Task(TaskInDB):
     """Task schema for API responses"""
     category_name: Optional[str] = None
+    subtasks: List["SubtaskInDB"] = []
 
     class Config:
         from_attributes = True
@@ -84,8 +93,23 @@ class TaskAnalyzeResponse(BaseModel):
     time_scope: TimeScope
     priority: TaskPriority
     suggested_time: Optional[str] = None  # Format: "HH:MM"
+    suggested_due_date: Optional[str] = None  # "today", "tomorrow", "this_week", "this_month"
     needs_deadline: bool = False
     category: Optional[str] = None
     confidence: float
     reasoning: str
+
+
+class TaskToMemoryConversion(BaseModel):
+    """Schema for converting a completed task to a memory"""
+    content: Optional[str] = None  # Additional content/notes
+    rating: Optional[float] = Field(None, ge=0, le=10)  # Rating for movies/books (0-10)
+    notes: Optional[str] = None  # Additional notes/thoughts
+    image_url: Optional[str] = None  # Optional image
+    backdrop_url: Optional[str] = None  # Optional backdrop
+
+
+# Resolve forward references
+from app.schemas.subtask import SubtaskInDB  # noqa: E402
+Task.model_rebuild()
 

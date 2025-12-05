@@ -12,6 +12,7 @@ from app.schemas.task import (
     TaskCreate,
     TaskUpdate,
     TaskListResponse,
+    TaskToMemoryConversion,
 )
 from app.services.task_service import TaskService
 
@@ -59,6 +60,7 @@ async def get_tasks(
             "title": task.title,
             "description": task.description,
             "due_date": task.due_date,
+            "scheduled_time": task.scheduled_time,
             "completed_at": task.completed_at,
             "status": task.status,
             "priority": task.priority,
@@ -178,4 +180,104 @@ async def delete_task(
         raise HTTPException(status_code=404, detail="Task not found")
 
     return None
+
+
+@router.post("/{task_id}/convert-to-memory")
+async def convert_task_to_memory(
+    task_id: UUID,
+    conversion_data: TaskToMemoryConversion,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Convert a completed task to a memory
+    
+    **Flow:**
+    1. Verify task exists and is completed
+    2. Create memory with task's content + additional notes
+    3. Link memory to task (related_task_id)
+    4. Process memory with AI (classification, embeddings)
+    
+    **Examples:**
+    - "Посмотреть Начало" → "Посмотрел Начало"
+    - "Прочитать 1984" → "Прочитал 1984"
+    - "Сходить в Парк Горького" → "Посетил Парк Горького"
+    
+    **Request body:**
+    - content: Additional content/notes about the completed task
+    - rating: Optional rating (0-10) for movies/books
+    - notes: Additional thoughts/impressions
+    - image_url: Optional image
+    - backdrop_url: Optional backdrop
+    """
+    memory = await TaskService.convert_to_memory(
+        db=db,
+        task_id=task_id,
+        user_id=current_user.id,
+        conversion_data=conversion_data,
+    )
+    
+    if not memory:
+        raise HTTPException(status_code=404, detail="Task not found or not completed")
+    
+    return memory
+
+
+@router.post("/{task_id}/generate-instances")
+async def generate_recurring_instances(
+    task_id: UUID,
+    days_ahead: int = Query(7, ge=1, le=30),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Generate recurring task instances for the next N days
+    
+    **Flow:**
+    1. Verify task is recurring (is_recurring=true)
+    2. Parse recurrence_rule (RRULE format)
+    3. Generate task instances for the next N days
+    4. Skip dates that already have instances
+    
+    **Supported recurrence rules:**
+    - `FREQ=DAILY` - Every day
+    - `FREQ=WEEKLY` - Every week (same day)
+    - `FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR` - Weekdays only
+    - `FREQ=MONTHLY` - Every month (same day)
+    
+    **Query params:**
+    - days_ahead: Number of days to generate (1-30, default 7)
+    
+    **Returns:**
+    List of created task instances
+    
+    **Example:**
+    ```
+    Task: "Почистить зубы"
+    - is_recurring: true
+    - recurrence_rule: "FREQ=DAILY"
+    
+    → Creates 7 instances (today to 7 days ahead)
+    ```
+    """
+    instances = await TaskService.generate_recurring_instances(
+        db=db,
+        task_id=task_id,
+        user_id=current_user.id,
+        days_ahead=days_ahead,
+    )
+    
+    return {
+        "parent_task_id": str(task_id),
+        "instances_created": len(instances),
+        "instances": [
+            {
+                "id": str(inst.id),
+                "title": inst.title,
+                "due_date": inst.due_date.isoformat() if inst.due_date else None,
+                "status": inst.status.value,
+            }
+            for inst in instances
+        ]
+    }
 
