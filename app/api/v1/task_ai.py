@@ -23,6 +23,7 @@ class TaskAnalysisResponse(BaseModel):
     priority: str
     suggested_time: str | None = None  # Format: "HH:MM"
     needs_deadline: bool = False
+    is_recurring: bool = False
     category: str | None
     confidence: float
     reasoning: str
@@ -37,6 +38,31 @@ class TaskSuggestion(BaseModel):
     confidence: float
     reasoning: str
     category: str | None = None
+
+
+class HabitAnalysisRequest(BaseModel):
+    """Request for habit analysis"""
+    title: str  # e.g., "Бросить курить", "Начать бегать"
+
+
+class SubtaskSuggestion(BaseModel):
+    """Suggested subtask for a habit"""
+    title: str
+    description: str | None = None
+    priority: str
+    suggested_time: str | None = None  # Format: "HH:MM"
+    color: str  # Hex color
+    icon: str  # Ionicons name
+    is_recurring: bool = True  # Most habit subtasks are daily
+
+
+class HabitAnalysisResponse(BaseModel):
+    """Response with habit analysis and suggested subtasks"""
+    group_name: str  # e.g., "Бросить курить"
+    group_icon: str  # Emoji for the group
+    subtasks: List[SubtaskSuggestion]
+    confidence: float
+    reasoning: str
 
 
 @router.post("/analyze", response_model=TaskAnalysisResponse)
@@ -95,4 +121,29 @@ async def suggest_tasks_from_memory(
     suggestions = await ai_service.suggest_tasks_from_memory(memory, limit=3)
     
     return suggestions
+
+
+@router.post("/analyze-habit", response_model=HabitAnalysisResponse)
+async def analyze_habit(
+    request: HabitAnalysisRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Analyze habit/goal and generate suggested subtasks
+    
+    **Examples:**
+    - "Бросить курить" → ["Выпить воды", "Использовать пластырь", "Сделать упражнение"]
+    - "Начать бегать" → ["Утренняя пробежка", "Растяжка", "Выпить воды"]
+    - "Похудеть" → ["Здоровый завтрак", "Тренировка", "Прогулка"]
+    
+    **Returns:**
+    - Название группы
+    - Иконка группы (emoji)
+    - Список подзадач (4-6 штук)
+    - Каждая подзадача с title, description, priority, suggested_time, color, icon
+    """
+    ai_service = TaskAIService()
+    result = await ai_service.analyze_habit(request.title)
+    
+    return result
 

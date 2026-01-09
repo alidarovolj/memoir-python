@@ -53,7 +53,7 @@ class MemoryInDB(MemoryBase):
 
 class Memory(MemoryInDB):
     """Memory response schema"""
-    pass
+    category_name: Optional[str] = None
 
 
 class MemoryWithCategory(Memory):

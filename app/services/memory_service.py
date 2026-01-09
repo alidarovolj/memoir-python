@@ -145,3 +145,35 @@ class MemoryService:
         await db.delete(memory)
         await db.commit()
 
+
+    @staticmethod
+    async def get_throwback_memory(
+        db: AsyncSession,
+        user_id: str,
+        years_ago: int = 1,
+    ) -> Optional[Memory]:
+        """
+        Get a memory from exactly N years ago (same day and month).
+        Returns the most recent memory if multiple exist on that day.
+        """
+        from datetime import datetime, timedelta
+        from sqlalchemy import and_, extract
+        
+        # Calculate the target date (N years ago, same day and month)
+        today = datetime.now()
+        target_year = today.year - years_ago
+        
+        # Find memories created on this day/month N years ago
+        query = select(Memory).where(
+            and_(
+                Memory.user_id == user_id,
+                extract('month', Memory.created_at) == today.month,
+                extract('day', Memory.created_at) == today.day,
+                extract('year', Memory.created_at) == target_year,
+            )
+        ).order_by(Memory.created_at.desc())
+        
+        result = await db.execute(query)
+        memory = result.scalar_one_or_none()
+        
+        return memory

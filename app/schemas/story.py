@@ -35,6 +35,16 @@ class StoryWithDetails(Story):
     """Story with user and memory details"""
     user: Optional[dict] = None  # username, avatar
     memory: Optional[dict] = None  # title, image_url, content preview
+    
+    # Social features
+    likes_count: int = 0
+    comments_count: int = 0
+    shares_count: int = 0
+    reposts_count: int = 0
+    is_liked: bool = False  # Лайкнул ли текущий пользователь
+    
+    # Для репостов
+    original_story: Optional[dict] = None  # Оригинальная история, если это репост
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -43,4 +53,9 @@ class StoryList(BaseModel):
     """Story list"""
     items: list[StoryWithDetails]
     total: int
+
+
+class StoryRepostCreate(BaseModel):
+    """Story repost creation schema"""
+    is_public: bool = True
 

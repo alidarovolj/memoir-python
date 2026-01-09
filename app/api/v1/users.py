@@ -1,12 +1,18 @@
 """User settings and notification endpoints"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from pydantic import BaseModel
 from typing import Optional
+import shutil
+from pathlib import Path
+import uuid
 
 from app.db.session import get_db
 from app.models.user import User
+from app.models.memory import Memory
+from app.models.task import Task
+from app.models.story import Story
 from app.api.deps import get_current_user
 from app.services.notification_service import NotificationService
 
@@ -14,6 +20,30 @@ router = APIRouter()
 
 
 # Schemas
+class UserProfileResponse(BaseModel):
+    """User profile response"""
+    id: str
+    phone_number: Optional[str]
+    username: Optional[str]
+    email: Optional[str]
+    first_name: Optional[str]
+    last_name: Optional[str]
+    avatar_url: Optional[str]
+    firebase_uid: Optional[str]
+    created_at: str
+    updated_at: str
+    
+    class Config:
+        from_attributes = True
+
+
+class UserProfileUpdate(BaseModel):
+    """User profile update request"""
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[str] = None
+
+
 class FCMTokenRequest(BaseModel):
     """Request to save FCM token"""
     fcm_token: str
@@ -30,6 +60,162 @@ class NotificationSettingsResponse(BaseModel):
     task_reminders_enabled: bool
     reminder_hours_before: int
     fcm_token: Optional[str]
+
+
+class UserStatsResponse(BaseModel):
+    """User statistics response"""
+    memories_count: int
+    tasks_total: int
+    tasks_completed: int
+    tasks_in_progress: int
+    stories_count: int
+    total_time_tracked: int
+
+
+@router.get("/me", response_model=UserProfileResponse)
+async def get_current_user_profile(
+    current_user: User = Depends(get_current_user),
+):
+    """Get current user's profile information"""
+    return UserProfileResponse(
+        id=str(current_user.id),
+        phone_number=current_user.phone_number,
+        username=current_user.username,
+        email=current_user.email,
+        first_name=current_user.first_name,
+        last_name=current_user.last_name,
+        avatar_url=current_user.avatar_url,
+        firebase_uid=current_user.firebase_uid,
+        created_at=current_user.created_at.isoformat(),
+        updated_at=current_user.updated_at.isoformat(),
+    )
+
+
+@router.put("/me")
+async def update_current_user_profile(
+    first_name: Optional[str] = Form(None),
+    last_name: Optional[str] = Form(None),
+    email: Optional[str] = Form(None),
+    avatar: Optional[UploadFile] = File(None),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update current user's profile"""
+    try:
+        # Update text fields
+        if first_name is not None:
+            current_user.first_name = first_name
+        if last_name is not None:
+            current_user.last_name = last_name
+        if email is not None:
+            current_user.email = email
+        
+        # Handle avatar upload
+        if avatar:
+            # Create uploads directory if it doesn't exist
+            upload_dir = Path("uploads/avatars")
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Generate unique filename
+            file_extension = Path(avatar.filename).suffix
+            unique_filename = f"{uuid.uuid4()}{file_extension}"
+            file_path = upload_dir / unique_filename
+            
+            # Save file
+            with file_path.open("wb") as buffer:
+                shutil.copyfileobj(avatar.file, buffer)
+            
+            # Update user's avatar_url
+            current_user.avatar_url = f"/uploads/avatars/{unique_filename}"
+        
+        await db.commit()
+        await db.refresh(current_user)
+        
+        return {
+            "success": True,
+            "message": "Profile updated successfully",
+            "user": UserProfileResponse(
+                id=str(current_user.id),
+                phone_number=current_user.phone_number,
+                username=current_user.username,
+                email=current_user.email,
+                first_name=current_user.first_name,
+                last_name=current_user.last_name,
+                avatar_url=current_user.avatar_url,
+                firebase_uid=current_user.firebase_uid,
+                created_at=current_user.created_at.isoformat(),
+                updated_at=current_user.updated_at.isoformat(),
+            )
+        }
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update profile: {str(e)}"
+        )
+
+
+@router.get("/me/stats", response_model=UserStatsResponse)
+async def get_user_stats(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get user's statistics
+    
+    Returns counts of memories, tasks, stories and total time tracked.
+    """
+    try:
+        # Count memories
+        memories_count_query = select(func.count(Memory.id)).where(
+            Memory.user_id == current_user.id
+        )
+        memories_count = await db.scalar(memories_count_query) or 0
+        
+        # Count all tasks
+        tasks_total_query = select(func.count(Task.id)).where(
+            Task.user_id == current_user.id
+        )
+        tasks_total = await db.scalar(tasks_total_query) or 0
+        
+        # Count completed tasks
+        tasks_completed_query = select(func.count(Task.id)).where(
+            Task.user_id == current_user.id,
+            Task.status == "completed"
+        )
+        tasks_completed = await db.scalar(tasks_completed_query) or 0
+        
+        # Count in-progress tasks
+        tasks_in_progress_query = select(func.count(Task.id)).where(
+            Task.user_id == current_user.id,
+            Task.status == "in_progress"
+        )
+        tasks_in_progress = await db.scalar(tasks_in_progress_query) or 0
+        
+        # Count stories
+        stories_count_query = select(func.count(Story.id)).where(
+            Story.user_id == current_user.id
+        )
+        stories_count = await db.scalar(stories_count_query) or 0
+        
+        # Calculate total time tracked (sum of task durations in seconds)
+        # For now, we'll use a simple estimation based on completed tasks
+        # TODO: Implement actual time tracking when that feature is added
+        total_time_tracked = tasks_completed * 1800  # Estimate 30 min per task
+        
+        return UserStatsResponse(
+            memories_count=memories_count,
+            tasks_total=tasks_total,
+            tasks_completed=tasks_completed,
+            tasks_in_progress=tasks_in_progress,
+            stories_count=stories_count,
+            total_time_tracked=total_time_tracked,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to load user stats: {str(e)}"
+        )
 
 
 @router.post("/fcm-token")

@@ -33,10 +33,19 @@ async def get_memories(
         limit=size,
     )
     
+    # Add category_name to each memory
+    items_with_category = []
+    for memory in memories:
+        memory_dict = {
+            **memory.__dict__,
+            "category_name": memory.category.name if memory.category else None,
+        }
+        items_with_category.append(memory_dict)
+    
     pages = math.ceil(total / size) if total > 0 else 0
     
     return {
-        "items": memories,
+        "items": items_with_category,
         "total": total,
         "page": page,
         "size": size,
@@ -85,6 +94,34 @@ async def create_memory(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create memory: {str(e)}",
         )
+
+
+@router.get("/throwback", response_model=Memory | None)
+async def get_throwback_memory(
+    years_ago: int = Query(1, ge=1, le=10, description="Years ago (1-10)"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Get a memory from exactly N years ago (same day and month).
+    Perfect for nostalgic "On this day X years ago" notifications.
+    """
+    memory = await MemoryService.get_throwback_memory(
+        db,
+        user_id=str(current_user.id),
+        years_ago=years_ago,
+    )
+    
+    if not memory:
+        return None  # Возвращаем null вместо 404
+    
+    # Add category name
+    memory_dict = {
+        **memory.__dict__,
+        "category_name": memory.category.name if memory.category else None,
+    }
+    
+    return memory_dict
 
 
 @router.get("/{memory_id}", response_model=Memory)

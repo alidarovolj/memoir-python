@@ -14,6 +14,7 @@ class Story(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     memory_id = Column(UUID(as_uuid=True), ForeignKey("memories.id", ondelete="CASCADE"), nullable=False, index=True)
+    original_story_id = Column(UUID(as_uuid=True), ForeignKey("stories.id", ondelete="SET NULL"), nullable=True, index=True)  # Для репостов
     
     is_public = Column(Boolean, default=True, nullable=False)
     
@@ -23,6 +24,7 @@ class Story(Base):
     # Relationships
     user = relationship("User", backref="stories")
     memory = relationship("Memory", backref="stories")
+    original_story = relationship("Story", remote_side=[id], backref="reposts")
 
     def __repr__(self):
         return f"<Story {self.id} by {self.user_id}>"
@@ -31,4 +33,9 @@ class Story(Base):
     def is_expired(self) -> bool:
         """Проверка, истекла ли история"""
         return datetime.utcnow() > self.expires_at
+    
+    @property
+    def is_repost(self) -> bool:
+        """Проверка, является ли история репостом"""
+        return self.original_story_id is not None
 

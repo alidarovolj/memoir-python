@@ -3,6 +3,7 @@ from typing import Optional, List
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel
 
 from app.api.deps import get_current_user, get_db
 from app.models.user import User
@@ -19,12 +20,31 @@ from app.services.task_service import TaskService
 router = APIRouter()
 
 
+class SubtaskData(BaseModel):
+    """Data for a subtask in habit creation"""
+    title: str
+    description: str | None = None
+    priority: str
+    suggested_time: str | None = None
+    color: str | None = None
+    icon: str | None = None
+    is_recurring: bool = True
+
+
+class CreateHabitRequest(BaseModel):
+    """Request to create a habit with group and subtasks"""
+    habit_name: str
+    group_icon: str
+    subtasks: List[SubtaskData]
+
+
 @router.get("", response_model=TaskListResponse)
 async def get_tasks(
     status: Optional[TaskStatus] = None,
     time_scope: Optional[TimeScope] = None,
     priority: Optional[TaskPriority] = None,
     category_id: Optional[UUID] = None,
+    date: Optional[str] = Query(None, description="Filter by specific date (YYYY-MM-DD)"),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
     current_user: User = Depends(get_current_user),
@@ -38,6 +58,7 @@ async def get_tasks(
     - time_scope: daily, weekly, monthly, long_term
     - priority: low, medium, high, urgent
     - category_id: filter by category
+    - date: specific date to filter tasks (YYYY-MM-DD format)
     """
     skip = (page - 1) * page_size
     tasks, total = await TaskService.get_tasks(
@@ -47,11 +68,12 @@ async def get_tasks(
         time_scope=time_scope,
         priority=priority,
         category_id=category_id,
+        date=date,
         skip=skip,
         limit=page_size,
     )
 
-    # Add category names
+    # Add category names and task group info
     tasks_with_category = []
     for task in tasks:
         task_dict = {
@@ -59,6 +81,8 @@ async def get_tasks(
             "user_id": task.user_id,
             "title": task.title,
             "description": task.description,
+            "color": task.color,
+            "icon": task.icon,
             "due_date": task.due_date,
             "scheduled_time": task.scheduled_time,
             "completed_at": task.completed_at,
@@ -67,10 +91,16 @@ async def get_tasks(
             "time_scope": task.time_scope,
             "category_id": task.category_id,
             "category_name": task.category.name if task.category else None,
+            "task_group_id": str(task.task_group_id) if task.task_group_id else None,
+            "task_group_name": task.task_group.name if task.task_group else None,
+            "task_group_icon": task.task_group.icon if task.task_group else None,
             "related_memory_id": task.related_memory_id,
             "ai_suggested": task.ai_suggested,
             "ai_confidence": task.ai_confidence,
             "tags": task.tags,
+            "is_recurring": task.is_recurring,
+            "recurrence_rule": task.recurrence_rule,
+            "parent_task_id": task.parent_task_id,
             "created_at": task.created_at,
             "updated_at": task.updated_at,
         }
@@ -279,5 +309,119 @@ async def generate_recurring_instances(
             }
             for inst in instances
         ]
+    }
+
+
+@router.post("/create-habit")
+async def create_habit_with_subtasks(
+    request: CreateHabitRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Create a habit (goal) with a task group and multiple subtasks
+    
+    **Flow:**
+    1. Create a task group with the habit name and icon
+    2. Create all subtasks and link them to the group
+    3. Generate recurring instances for each subtask (7 days ahead)
+    
+    **Example request:**
+    ```json
+    {
+      "habit_name": "Бросить курить",
+      "group_icon": "🚭",
+      "subtasks": [
+        {
+          "title": "Выпить стакан воды",
+          "description": "Помогает снизить тягу",
+          "priority": "medium",
+          "suggested_time": "08:00",
+          "color": "#3B82F6",
+          "icon": "Ionicons.water_outline",
+          "is_recurring": true
+        }
+      ]
+    }
+    ```
+    
+    **Returns:**
+    - group_id: ID созданной группы
+    - subtasks_created: Количество созданных подзадач
+    - subtasks: Список созданных подзадач с их ID
+    """
+    from app.models.task_group import TaskGroup
+    from datetime import datetime
+    
+    # 1. Create task group
+    task_group = TaskGroup(
+        user_id=current_user.id,
+        name=request.habit_name,
+        icon=request.group_icon,
+        color="#6366F1",  # Default primary color
+    )
+    db.add(task_group)
+    await db.flush()  # Get group ID
+    
+    created_subtasks = []
+    
+    # 2. Create all subtasks
+    for subtask_data in request.subtasks:
+        # Parse priority
+        priority_map = {
+            "low": TaskPriority.low,
+            "medium": TaskPriority.medium,
+            "high": TaskPriority.high,
+            "urgent": TaskPriority.urgent,
+        }
+        priority = priority_map.get(subtask_data.priority.lower(), TaskPriority.medium)
+        
+        # Create TaskCreate schema
+        task_create = TaskCreate(
+            title=subtask_data.title,
+            description=subtask_data.description,
+            priority=priority,
+            time_scope=TimeScope.daily,  # Habits are usually daily
+            status=TaskStatus.pending,
+            due_date=datetime.now().date(),
+            scheduled_time=subtask_data.suggested_time,  # Already a string "HH:MM"
+            task_group_id=task_group.id,
+            is_recurring=subtask_data.is_recurring,
+            recurrence_rule="FREQ=DAILY" if subtask_data.is_recurring else None,
+            color=subtask_data.color,
+            icon=subtask_data.icon,
+        )
+        
+        # Create task
+        task = await TaskService.create_task(
+            db=db,
+            user_id=current_user.id,
+            task_data=task_create,
+        )
+        
+        # Generate recurring instances if recurring
+        if subtask_data.is_recurring:
+            await TaskService.generate_recurring_instances(
+                db=db,
+                task_id=task.id,
+                user_id=current_user.id,
+                days_ahead=7,
+            )
+        
+        created_subtasks.append({
+            "id": str(task.id),
+            "title": task.title,
+            "priority": task.priority.value,
+            "is_recurring": task.is_recurring,
+        })
+    
+    await db.commit()
+    
+    return {
+        "group_id": str(task_group.id),
+        "group_name": task_group.name,
+        "group_icon": task_group.icon,
+        "subtasks_created": len(created_subtasks),
+        "subtasks": created_subtasks,
     }
 

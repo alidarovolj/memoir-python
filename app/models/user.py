@@ -16,6 +16,11 @@ class User(Base):
     firebase_uid = Column(String(128), unique=True, nullable=True, index=True)
     username = Column(String(100), unique=True, nullable=True, index=True)
     
+    # Profile fields
+    first_name = Column(String(100), nullable=True)
+    last_name = Column(String(100), nullable=True)
+    avatar_url = Column(String(500), nullable=True)
+    
     # Keep email optional for future OAuth support
     email = Column(String(255), unique=True, nullable=True, index=True)
     
@@ -30,7 +35,17 @@ class User(Base):
     # Relationships
     memories = relationship("Memory", back_populates="user", cascade="all, delete-orphan")
     tasks = relationship("Task", back_populates="user", cascade="all, delete-orphan")
+    task_groups = relationship("TaskGroup", back_populates="user", cascade="all, delete-orphan")
+    pet = relationship("Pet", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    time_capsules = relationship("TimeCapsule", back_populates="user", cascade="all, delete-orphan")
+    challenge_participations = relationship("ChallengeParticipant", back_populates="user", cascade="all, delete-orphan")
+    achievements = relationship("UserAchievement", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<User {self.phone_number}>"
+    
+    @property
+    def has_pet(self) -> bool:
+        """Check if user has a pet"""
+        return self.pet is not None
 

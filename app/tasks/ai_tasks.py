@@ -12,6 +12,8 @@ from app.models.user import User  # noqa
 from app.models.category import Category  # noqa
 from app.models.memory import Memory  # noqa
 from app.models.embedding import Embedding  # noqa
+from app.models.task import Task  # noqa
+from app.models.subtask import Subtask  # noqa
 
 
 # Sync engine for Celery tasks

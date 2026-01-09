@@ -1,6 +1,8 @@
 """FastAPI application entry point"""
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
 from app.core.config import settings
 from app.api.v1 import api_router
 
@@ -19,6 +21,14 @@ app = FastAPI(
 #         FirebaseService.initialize_app()
 #     except Exception as e:
 #         print(f"⚠️ Warning: Firebase initialization failed: {e}")
+
+# Create uploads directory if it doesn't exist
+uploads_dir = Path("uploads")
+uploads_dir.mkdir(exist_ok=True)
+(uploads_dir / "avatars").mkdir(exist_ok=True)
+
+# Mount static files for uploads
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 # CORS middleware
 app.add_middleware(

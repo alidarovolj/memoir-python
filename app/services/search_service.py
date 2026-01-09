@@ -17,6 +17,7 @@ class SearchService:
         user_id: str,
         query: str,
         limit: int = 10,
+        threshold: float = 0.5,
     ) -> List[Memory]:
         """
         Perform semantic search using embeddings
@@ -26,6 +27,7 @@ class SearchService:
             user_id: User ID to filter memories
             query: Search query
             limit: Maximum results
+            threshold: Maximum cosine distance (0-1, lower is more similar)
         
         Returns:
             List of matching memories
@@ -34,13 +36,15 @@ class SearchService:
         query_embedding = await ai_service.generate_embedding(query)
         
         # Perform vector similarity search
-        # Using cosine similarity via pgvector
+        # Using cosine distance via pgvector (<=> operator)
+        # Distance of 0 means identical, distance of 1 means completely different
         sql = text("""
-            SELECT m.*
+            SELECT m.id, e.embedding <=> CAST(:query_embedding AS vector) as distance
             FROM memories m
             JOIN embeddings e ON m.id = e.memory_id
             WHERE m.user_id = :user_id
-            ORDER BY e.embedding <=> CAST(:query_embedding AS vector)
+            AND e.embedding <=> CAST(:query_embedding AS vector) < :threshold
+            ORDER BY distance
             LIMIT :limit
         """)
         
@@ -49,15 +53,20 @@ class SearchService:
             {
                 "user_id": user_id,
                 "query_embedding": str(query_embedding),
+                "threshold": threshold,
                 "limit": limit,
             }
         )
         
-        memory_ids = [row[0] for row in result.fetchall()]
+        rows = result.fetchall()
+        memory_ids = [str(row[0]) for row in rows]
         
         # Fetch full memory objects
         if not memory_ids:
             return []
+        
+        # Preserve the order from the semantic search
+        id_to_order = {str(row[0]): idx for idx, row in enumerate(rows)}
         
         query = select(Memory).where(Memory.id.in_(memory_ids))
         query = query.options(selectinload(Memory.category))
@@ -65,7 +74,10 @@ class SearchService:
         result = await db.execute(query)
         memories = result.scalars().all()
         
-        return list(memories)
+        # Sort by original order
+        memories_sorted = sorted(memories, key=lambda m: id_to_order.get(str(m.id), 999))
+        
+        return list(memories_sorted)
     
     @staticmethod
     async def text_search(

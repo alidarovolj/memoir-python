@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 
 from app.models.task import Task, TaskStatus, TaskPriority, TimeScope
 from app.models.memory import Memory, SourceType
@@ -22,6 +22,7 @@ class TaskService:
         time_scope: Optional[TimeScope] = None,
         priority: Optional[TaskPriority] = None,
         category_id: Optional[UUID] = None,
+        date: Optional[str] = None,
         skip: int = 0,
         limit: int = 50,
     ) -> tuple[List[Task], int]:
@@ -38,6 +39,27 @@ class TaskService:
             query = query.where(Task.priority == priority)
         if category_id:
             query = query.where(Task.category_id == category_id)
+        
+        # Filter by date - for recurring tasks, check due_date
+        if date:
+            from datetime import datetime
+            filter_date = datetime.strptime(date, "%Y-%m-%d").date()
+            query = query.where(
+                or_(
+                    # Non-recurring tasks: match due_date
+                    and_(
+                        Task.is_recurring == False,
+                        Task.due_date >= datetime.combine(filter_date, datetime.min.time()),
+                        Task.due_date < datetime.combine(filter_date + timedelta(days=1), datetime.min.time())
+                    ),
+                    # Recurring task instances: match due_date
+                    and_(
+                        Task.parent_task_id.isnot(None),
+                        Task.due_date >= datetime.combine(filter_date, datetime.min.time()),
+                        Task.due_date < datetime.combine(filter_date + timedelta(days=1), datetime.min.time())
+                    )
+                )
+            )
 
         # Order by: urgent first, then by due_date, then by created_at
         query = query.order_by(
@@ -56,6 +78,25 @@ class TaskService:
             count_query = count_query.where(Task.priority == priority)
         if category_id:
             count_query = count_query.where(Task.category_id == category_id)
+        if date:
+            from datetime import datetime
+            filter_date = datetime.strptime(date, "%Y-%m-%d").date()
+            count_query = count_query.where(
+                or_(
+                    # Non-recurring tasks: match due_date
+                    and_(
+                        Task.is_recurring == False,
+                        Task.due_date >= datetime.combine(filter_date, datetime.min.time()),
+                        Task.due_date < datetime.combine(filter_date + timedelta(days=1), datetime.min.time())
+                    ),
+                    # Recurring task instances: match due_date
+                    and_(
+                        Task.parent_task_id.isnot(None),
+                        Task.due_date >= datetime.combine(filter_date, datetime.min.time()),
+                        Task.due_date < datetime.combine(filter_date + timedelta(days=1), datetime.min.time())
+                    )
+                )
+            )
 
         count_result = await db.execute(count_query)
         total = len(count_result.scalars().all())
@@ -64,7 +105,12 @@ class TaskService:
         query = query.offset(skip).limit(limit)
 
         # Execute
-        result = await db.execute(query.options(joinedload(Task.category)))
+        result = await db.execute(
+            query.options(
+                joinedload(Task.category),
+                selectinload(Task.task_group),
+            )
+        )
         tasks = result.scalars().all()
 
         return tasks, total
@@ -79,7 +125,11 @@ class TaskService:
         result = await db.execute(
             select(Task)
             .where(and_(Task.id == task_id, Task.user_id == user_id))
-            .options(joinedload(Task.category), joinedload(Task.related_memory))
+            .options(
+                joinedload(Task.category),
+                joinedload(Task.related_memory),
+                selectinload(Task.task_group),
+            )
         )
         return result.scalar_one_or_none()
 
@@ -94,14 +144,20 @@ class TaskService:
             user_id=user_id,
             title=task_data.title,
             description=task_data.description,
+            color=task_data.color,
+            icon=task_data.icon,
             due_date=task_data.due_date,
             scheduled_time=task_data.scheduled_time,
             status=task_data.status,
             priority=task_data.priority,
             time_scope=task_data.time_scope,
             category_id=task_data.category_id,
+            task_group_id=task_data.task_group_id,
             related_memory_id=task_data.related_memory_id,
             tags=task_data.tags,
+            is_recurring=task_data.is_recurring,
+            recurrence_rule=task_data.recurrence_rule,
+            parent_task_id=task_data.parent_task_id,
         )
 
         db.add(task)
@@ -186,7 +242,10 @@ class TaskService:
                     Task.due_date <= end_date,
                 )
             )
-            .options(joinedload(Task.category))
+            .options(
+                joinedload(Task.category),
+                selectinload(Task.task_group),
+            )
             .order_by(Task.due_date.asc())
         )
         return result.scalars().all()
@@ -376,12 +435,15 @@ class TaskService:
                 parent_task_id=parent_task.id,
                 title=parent_task.title,
                 description=parent_task.description,
+                color=parent_task.color,
+                icon=parent_task.icon,
                 due_date=date,
                 scheduled_time=parent_task.scheduled_time,
                 status=TaskStatus.pending,
                 priority=parent_task.priority,
                 time_scope=parent_task.time_scope,
                 category_id=parent_task.category_id,
+                task_group_id=parent_task.task_group_id,
                 tags=parent_task.tags,
                 is_recurring=False,  # Instances are not recurring themselves
             )

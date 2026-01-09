@@ -43,6 +43,10 @@ class Task(Base):
     # Basic info
     title = Column(String(500), nullable=False)
     description = Column(Text, nullable=True)
+    
+    # Appearance
+    color = Column(String(7), nullable=True)  # Hex color format: #RRGGBB
+    icon = Column(String(50), nullable=True)  # Icon name
 
     # Timing
     due_date = Column(DateTime(timezone=True), nullable=True)
@@ -57,6 +61,7 @@ class Task(Base):
     # Relations
     category_id = Column(UUID(as_uuid=True), ForeignKey("categories.id", ondelete="SET NULL"), nullable=True)
     related_memory_id = Column(UUID(as_uuid=True), ForeignKey("memories.id", ondelete="SET NULL"), nullable=True)
+    task_group_id = Column(UUID(as_uuid=True), ForeignKey("task_groups.id", ondelete="SET NULL"), nullable=True)
 
     # AI
     ai_suggested = Column(Boolean, default=False, nullable=False)
@@ -76,6 +81,7 @@ class Task(Base):
     user = relationship("User", back_populates="tasks")
     category = relationship("Category")
     related_memory = relationship("Memory", foreign_keys="[Task.related_memory_id]")
+    task_group = relationship("TaskGroup", back_populates="tasks")
     parent_task = relationship("Task", remote_side="[Task.id]", foreign_keys="[Task.parent_task_id]", backref="recurring_instances")
     subtasks = relationship("Subtask", back_populates="task", cascade="all, delete-orphan", order_by="Subtask.order")
 

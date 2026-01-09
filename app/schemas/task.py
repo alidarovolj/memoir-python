@@ -14,12 +14,15 @@ class TaskBase(BaseModel):
     """Base Task schema"""
     title: str = Field(..., max_length=500)
     description: Optional[str] = None
+    color: Optional[str] = Field(None, max_length=7, pattern=r"^#[0-9A-Fa-f]{6}$")  # Hex color format
+    icon: Optional[str] = Field(None, max_length=50)  # Icon name
     due_date: Optional[datetime] = None
     scheduled_time: Optional[str] = Field(None, max_length=5, pattern=r"^\d{2}:\d{2}$")  # Format: "HH:MM"
     status: TaskStatus = TaskStatus.pending
     priority: TaskPriority = TaskPriority.medium
     time_scope: TimeScope = TimeScope.daily
     category_id: Optional[UUID] = None
+    task_group_id: Optional[UUID] = None
     related_memory_id: Optional[UUID] = None
     tags: Optional[List[str]] = None
     is_recurring: bool = False
@@ -36,12 +39,15 @@ class TaskUpdate(BaseModel):
     """Schema for updating a task"""
     title: Optional[str] = Field(None, max_length=500)
     description: Optional[str] = None
+    color: Optional[str] = Field(None, max_length=7, pattern=r"^#[0-9A-Fa-f]{6}$")  # Hex color format
+    icon: Optional[str] = Field(None, max_length=50)  # Icon name
     due_date: Optional[datetime] = None
     scheduled_time: Optional[str] = Field(None, max_length=5, pattern=r"^\d{2}:\d{2}$")
     status: Optional[TaskStatus] = None
     priority: Optional[TaskPriority] = None
     time_scope: Optional[TimeScope] = None
     category_id: Optional[UUID] = None
+    task_group_id: Optional[UUID] = None
     related_memory_id: Optional[UUID] = None
     tags: Optional[List[str]] = None
 
@@ -63,6 +69,8 @@ class TaskInDB(TaskBase):
 class Task(TaskInDB):
     """Task schema for API responses"""
     category_name: Optional[str] = None
+    task_group_name: Optional[str] = None
+    task_group_icon: Optional[str] = None
     subtasks: List["SubtaskInDB"] = []
 
     class Config:
@@ -95,6 +103,7 @@ class TaskAnalyzeResponse(BaseModel):
     suggested_time: Optional[str] = None  # Format: "HH:MM"
     suggested_due_date: Optional[str] = None  # "today", "tomorrow", "this_week", "this_month"
     needs_deadline: bool = False
+    is_recurring: bool = False  # Should this task repeat?
     category: Optional[str] = None
     confidence: float
     reasoning: str
