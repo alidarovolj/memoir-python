@@ -59,8 +59,9 @@ class MobizonService:
             
             # Добавляем подпись отправителя если указана
             # Note: Alpha-name must be pre-registered in Mobizon
-            if originator and originator.strip():
-                data["from"] = originator
+            # ВРЕМЕННО ОТКЛЮЧЕНО: Alpha-name "Memoir" не зарегистрирован
+            # if originator and originator.strip():
+            #     data["from"] = originator
             
             # API ключ и output в query string
             params = {
