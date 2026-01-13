@@ -1,11 +1,12 @@
 """API v1 routes"""
 from fastapi import APIRouter
-from app.api.v1 import auth, sms_auth, memories, categories, search, smart_search, stories, tasks, task_groups, task_ai, subtasks, users, analytics, pets, pet_shop, pet_games, pet_social, pet_journal, time_capsules, daily_prompts, challenges, ai_stories, achievements, voice, friends, memory_sharing, memory_reactions, group_challenges
+from app.api.v1 import auth, sms_auth, email_auth, memories, categories, search, smart_search, stories, tasks, task_groups, task_ai, subtasks, users, analytics, pets, pet_shop, pet_games, pet_social, pet_journal, time_capsules, daily_prompts, challenges, ai_stories, achievements, voice, friends, memory_sharing, memory_reactions, group_challenges
 
 api_router = APIRouter()
 
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
 api_router.include_router(sms_auth.router, prefix="/sms-auth", tags=["sms-auth"])
+api_router.include_router(email_auth.router, prefix="/email-auth", tags=["email-auth"])
 api_router.include_router(users.router, prefix="/users", tags=["users"])
 api_router.include_router(memories.router, prefix="/memories", tags=["memories"])
 api_router.include_router(categories.router, prefix="/categories", tags=["categories"])

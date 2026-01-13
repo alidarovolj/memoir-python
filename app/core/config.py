@@ -37,6 +37,16 @@ class Settings(BaseSettings):
     MOBIZON_API_KEY: str = ""
     SMS_TEST_MODE: bool = False  # Если True, код просто логируется вместо отправки SMS
     
+    # Email Settings (SMTP)
+    SMTP_HOST: str = "smtp.gmail.com"  # или другой SMTP сервер
+    SMTP_PORT: int = 587  # 587 для TLS, 465 для SSL, 25 для без шифрования
+    SMTP_TLS: bool = True  # True для STARTTLS (port 587)
+    SMTP_USER: str = ""  # email для авторизации
+    SMTP_PASSWORD: str = ""  # пароль или app-specific password
+    EMAIL_FROM: str = "noreply@memoir.app"  # email отправителя
+    EMAIL_FROM_NAME: str = "Memoir"  # имя отправителя
+    EMAIL_TEST_MODE: bool = False  # Если True, код просто логируется вместо отправки email
+    
     # Auth
     JWT_SECRET_KEY: str
     JWT_ALGORITHM: str = "HS256"
