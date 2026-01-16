@@ -91,3 +91,4 @@ dump.rdb
 # Backup files
 *.bak
 *.backup
+uploads/
