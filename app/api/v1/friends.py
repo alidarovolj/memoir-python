@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, and_, func
 from typing import List
@@ -73,8 +73,10 @@ async def user_to_friend_profile(user: User, db: AsyncSession) -> FriendProfile:
     friends_count = friends_count_result.scalar()
     
     return FriendProfile(
-        id=user.id,
-        username=user.username,
+        id=str(user.id),  # Convert UUID to string
+        username=user.username or "",
+        first_name=user.first_name if hasattr(user, 'first_name') else None,
+        last_name=user.last_name if hasattr(user, 'last_name') else None,
         avatar_url=user.avatar_url if hasattr(user, 'avatar_url') else None,
         created_at=user.created_at,
         memories_count=memories_count or 0,
@@ -357,12 +359,17 @@ async def search_users(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Search for users by username
+    Search for users by username, first name, or last name
     """
-    # Search users by username (case-insensitive partial match)
+    # Search users by username, first_name, or last_name (case-insensitive partial match)
+    search_pattern = f"%{search.query}%"
     query = select(User).where(
         and_(
-            User.username.ilike(f"%{search.query}%"),
+            or_(
+                User.username.ilike(search_pattern),
+                User.first_name.ilike(search_pattern),
+                User.last_name.ilike(search_pattern)
+            ),
             User.id != current_user.id  # Exclude self
         )
     ).limit(search.limit).offset(search.offset)
@@ -379,7 +386,11 @@ async def search_users(
     # Get total count
     count_query = select(func.count()).select_from(User).where(
         and_(
-            User.username.ilike(f"%{search.query}%"),
+            or_(
+                User.username.ilike(search_pattern),
+                User.first_name.ilike(search_pattern),
+                User.last_name.ilike(search_pattern)
+            ),
             User.id != current_user.id
         )
     )
@@ -389,4 +400,80 @@ async def search_users(
     return UserSearchResult(
         users=user_profiles,
         total=total or 0
+    )
+
+
+# ============================================================================
+# User Suggestions
+# ============================================================================
+
+@router.get("/suggestions", response_model=UserSearchResult)
+async def get_user_suggestions(
+    limit: int = Query(default=10, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get suggested users (random users who are not friends yet)
+    """
+    # Get all users who are not friends with current user
+    # First, get list of friend IDs
+    friends_query = select(Friendship).where(
+        and_(
+            or_(
+                Friendship.requester_id == current_user.id,
+                Friendship.addressee_id == current_user.id
+            ),
+            Friendship.status == FriendshipStatus.ACCEPTED
+        )
+    )
+    friends_result = await db.execute(friends_query)
+    friendships = friends_result.scalars().all()
+    
+    friend_ids = set()
+    for friendship in friendships:
+        if friendship.requester_id == current_user.id:
+            friend_ids.add(friendship.addressee_id)
+        else:
+            friend_ids.add(friendship.requester_id)
+    
+    # Get pending friend request IDs
+    pending_query = select(Friendship).where(
+        and_(
+            or_(
+                Friendship.requester_id == current_user.id,
+                Friendship.addressee_id == current_user.id
+            ),
+            Friendship.status == FriendshipStatus.PENDING
+        )
+    )
+    pending_result = await db.execute(pending_query)
+    pending_friendships = pending_result.scalars().all()
+    
+    for friendship in pending_friendships:
+        if friendship.requester_id == current_user.id:
+            friend_ids.add(friendship.addressee_id)
+        else:
+            friend_ids.add(friendship.requester_id)
+    
+    # Get random users excluding friends and current user
+    suggestions_query = select(User).where(
+        and_(
+            User.id != current_user.id,
+            User.id.notin_(friend_ids) if friend_ids else True
+        )
+    ).order_by(func.random()).limit(limit)
+    
+    result = await db.execute(suggestions_query)
+    users = result.scalars().all()
+    
+    # Convert to FriendProfile
+    user_profiles = []
+    for user in users:
+        profile = await user_to_friend_profile(user, db)
+        user_profiles.append(profile)
+    
+    return UserSearchResult(
+        users=user_profiles,
+        total=len(user_profiles)
     )

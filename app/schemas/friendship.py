@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, validator, ConfigDict
 from datetime import datetime
 from typing import Optional
 from app.models.friendship import FriendshipStatus
@@ -15,8 +15,12 @@ class FriendshipBase(BaseModel):
 
 class FriendProfile(BaseModel):
     """Friend's public profile information"""
-    id: int
+    model_config = ConfigDict(from_attributes=True)
+    
+    id: str  # Changed from int to str for UUID support
     username: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
     avatar_url: Optional[str] = None
     created_at: datetime
     
@@ -24,9 +28,6 @@ class FriendProfile(BaseModel):
     memories_count: Optional[int] = 0
     friends_count: Optional[int] = 0
     streak_days: Optional[int] = 0
-    
-    class Config:
-        orm_mode = True
 
 
 # ============================================================================
@@ -35,18 +36,12 @@ class FriendProfile(BaseModel):
 
 class FriendRequestCreate(BaseModel):
     """Send friend request"""
-    addressee_id: int = Field(..., description="ID of user to befriend", gt=0)
-    
-    @validator('addressee_id')
-    def validate_addressee(cls, v):
-        if v <= 0:
-            raise ValueError('addressee_id must be positive')
-        return v
+    addressee_id: str = Field(..., description="ID of user to befriend")
 
 
 class FriendRequestResponse(BaseModel):
     """Respond to friend request"""
-    request_id: int = Field(..., description="ID of friendship request")
+    request_id: str = Field(..., description="ID of friendship request")
     action: str = Field(..., description="Action: 'accept' or 'reject'")
     
     @validator('action')
@@ -58,7 +53,7 @@ class FriendRequestResponse(BaseModel):
 
 class FriendRemove(BaseModel):
     """Remove friend"""
-    friend_id: int = Field(..., description="ID of friend to remove")
+    friend_id: str = Field(..., description="ID of friend to remove")
 
 
 class UserSearch(BaseModel):
@@ -74,31 +69,29 @@ class UserSearch(BaseModel):
 
 class FriendshipOut(BaseModel):
     """Friendship output"""
-    id: int
-    requester_id: int
-    addressee_id: int
+    model_config = ConfigDict(from_attributes=True)
+    
+    id: str
+    requester_id: str
+    addressee_id: str
     status: FriendshipStatus
     created_at: datetime
     updated_at: datetime
     
     # Populated friend info
     friend: Optional[FriendProfile] = None
-    
-    class Config:
-        orm_mode = True
 
 
 class FriendRequestOut(BaseModel):
     """Friend request with user info"""
-    id: int
+    model_config = ConfigDict(from_attributes=True)
+    
+    id: str
     status: FriendshipStatus
     created_at: datetime
     
     # User who sent the request
     requester: FriendProfile
-    
-    class Config:
-        orm_mode = True
 
 
 class FriendsList(BaseModel):
