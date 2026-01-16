@@ -10,6 +10,9 @@ class UserBase(BaseModel):
     phone_number: str = Field(..., min_length=10, max_length=20)
     username: Optional[str] = Field(None, min_length=3, max_length=100)
     email: Optional[EmailStr] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    avatar_url: Optional[str] = None
 
 
 class UserCreatePhone(BaseModel):
