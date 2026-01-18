@@ -8,10 +8,20 @@ from app.tasks.celery_app import celery_app
 from app.core.config import settings
 from app.services.notification_service import NotificationService
 
-# Import models
+# Import models - все модели нужны для правильной инициализации relationships
 from app.models.user import User
 from app.models.task import Task, TaskStatus
 from app.models.pet import Pet
+from app.models.time_capsule import TimeCapsule
+# Импортируем все модели, которые используются в relationships User
+try:
+    from app.models.challenge import ChallengeParticipant
+except ImportError:
+    pass  # Модель может не существовать
+try:
+    from app.models.achievement import UserAchievement
+except ImportError:
+    pass  # Модель может не существовать
 
 # Sync engine for Celery tasks
 sync_engine = create_engine(settings.DATABASE_URL_SYNC)
@@ -48,7 +58,8 @@ def check_task_reminders():
     """
     db = SyncSessionLocal()
     try:
-        now = datetime.utcnow()
+        from datetime import timezone
+        now = datetime.now(timezone.utc)
         
         # Get all users with reminders enabled and FCM token
         users = db.query(User).filter(
@@ -67,6 +78,9 @@ def check_task_reminders():
             window_end = reminder_time + timedelta(minutes=30)    # 30 min after
             
             # Find tasks that need reminders
+            # Only send if task hasn't been updated in the last 55 minutes
+            # This prevents duplicate notifications if the task stays in the window for an hour
+            min_update_time = now - timedelta(minutes=55)
             tasks = db.query(Task).filter(
                 and_(
                     Task.user_id == user.id,
@@ -74,14 +88,23 @@ def check_task_reminders():
                     Task.due_date.isnot(None),
                     Task.due_date >= window_start,
                     Task.due_date <= window_end,
+                    # Only send if task wasn't updated in the last 55 minutes
+                    # This ensures we send reminder once per hour max
+                    Task.updated_at < min_update_time,
                 )
             ).all()
             
             # Send reminders
             for task in tasks:
                 try:
+                    # Ensure due_date is timezone-aware
+                    task_due = task.due_date
+                    if task_due.tzinfo is None:
+                        # If timezone-naive, assume UTC
+                        task_due = task_due.replace(tzinfo=timezone.utc)
+                    
                     # Calculate hours until due
-                    time_diff = task.due_date - now
+                    time_diff = task_due - now
                     hours_until_due = int(time_diff.total_seconds() / 3600)
                     
                     # Send notification
@@ -96,6 +119,9 @@ def check_task_reminders():
                     
                     if success:
                         reminders_sent += 1
+                        # Update task to mark that reminder was sent (prevent duplicates)
+                        task.updated_at = now
+                        db.commit()
                         print(f"✅ Sent reminder for task '{task.title}' to user {user.phone_number}")
                     else:
                         print(f"❌ Failed to send reminder for task '{task.title}'")
@@ -247,12 +273,18 @@ def check_overdue_tasks():
         
         for user in users:
             # Find overdue tasks
+            # Only send alert if task hasn't been updated in the last 23 hours
+            # This prevents sending duplicate alerts every 4 hours
+            min_update_time = now - timedelta(hours=23)
             overdue_tasks = db.query(Task).filter(
                 and_(
                     Task.user_id == user.id,
                     Task.status == TaskStatus.pending,
                     Task.due_date.isnot(None),
                     Task.due_date < now,
+                    # Only send if task was last updated more than 23 hours ago
+                    # This ensures we send alert once per day max
+                    Task.updated_at < min_update_time,
                 )
             ).all()
             
@@ -269,6 +301,9 @@ def check_overdue_tasks():
                     
                     if success:
                         alerts_sent += 1
+                        # Update task to mark that alert was sent (prevent duplicates)
+                        task.updated_at = now
+                        db.commit()
                         print(f"✅ Sent overdue alert for '{task.title}' to user {user.phone_number}")
                     
                 except Exception as e:

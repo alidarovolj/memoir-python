@@ -1,6 +1,6 @@
 """Business logic for Task operations"""
 from typing import List, Optional, Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_
@@ -429,6 +429,32 @@ class TaskService:
             if existing_result.scalar_one_or_none():
                 continue  # Skip if instance already exists
             
+            # Create due_date with time from scheduled_time
+            # If scheduled_time is provided (e.g., "08:00"), combine with date
+            # Otherwise, use end of day (23:59)
+            if parent_task.scheduled_time:
+                try:
+                    hour, minute = map(int, parent_task.scheduled_time.split(':'))
+                    due_date = datetime(
+                        date.year, date.month, date.day, 
+                        hour, minute, 
+                        tzinfo=timezone.utc
+                    )
+                except (ValueError, AttributeError):
+                    # If parsing fails, use end of day
+                    due_date = datetime(
+                        date.year, date.month, date.day, 
+                        23, 59, 
+                        tzinfo=timezone.utc
+                    )
+            else:
+                # No scheduled time, use end of day
+                due_date = datetime(
+                    date.year, date.month, date.day, 
+                    23, 59, 
+                    tzinfo=timezone.utc
+                )
+            
             # Create new instance
             instance = Task(
                 user_id=user_id,
@@ -437,7 +463,7 @@ class TaskService:
                 description=parent_task.description,
                 color=parent_task.color,
                 icon=parent_task.icon,
-                due_date=date,
+                due_date=due_date,
                 scheduled_time=parent_task.scheduled_time,
                 status=TaskStatus.pending,
                 priority=parent_task.priority,

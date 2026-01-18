@@ -53,6 +53,12 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 43200  # 30 days (30 * 24 * 60)
     REFRESH_TOKEN_EXPIRE_DAYS: int = 90  # 90 days
     
+    # Apple Sign In (optional - for production use p8 key verification)
+    APPLE_KEY_ID: str = ""
+    APPLE_TEAM_ID: str = ""
+    APPLE_CLIENT_ID: str = ""
+    APPLE_KEY_PATH: str = ""
+    
     # Celery
     CELERY_BROKER_URL: str
     CELERY_RESULT_BACKEND: str
@@ -75,4 +81,9 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def get_settings() -> Settings:
+    """Get application settings"""
+    return settings
 

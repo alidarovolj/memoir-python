@@ -55,6 +55,18 @@ services:
       redis:
         condition: service_healthy
 
+  celery_beat:
+    build: .
+    command: celery -A app.tasks.celery_app beat --loglevel=info
+    env_file:
+      - .env
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   flower:
     build: .
     command: celery -A app.tasks.celery_app flower --port=5555

@@ -12,8 +12,10 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    phone_number = Column(String(20), unique=True, nullable=False, index=True)
+    phone_number = Column(String(20), unique=True, nullable=True, index=True)  # Now optional for Google auth
     firebase_uid = Column(String(128), unique=True, nullable=True, index=True)
+    google_id = Column(String(255), unique=True, nullable=True, index=True)  # Google OAuth ID
+    apple_id = Column(String(255), unique=True, nullable=True, index=True)  # Apple OAuth ID
     username = Column(String(100), unique=True, nullable=True, index=True)
     
     # Profile fields

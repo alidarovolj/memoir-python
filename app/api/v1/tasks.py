@@ -351,7 +351,7 @@ async def create_habit_with_subtasks(
     - subtasks: Список созданных подзадач с их ID
     """
     from app.models.task_group import TaskGroup
-    from datetime import datetime
+    from datetime import datetime, timezone
     
     # 1. Create task group
     task_group = TaskGroup(
@@ -376,6 +376,21 @@ async def create_habit_with_subtasks(
         }
         priority = priority_map.get(subtask_data.priority.lower(), TaskPriority.medium)
         
+        # Calculate due_date with time from scheduled_time
+        # If scheduled_time is provided (e.g., "08:00"), combine with today's date
+        # Otherwise, use end of today (23:59)
+        now = datetime.now(timezone.utc)
+        if subtask_data.suggested_time:
+            try:
+                hour, minute = map(int, subtask_data.suggested_time.split(':'))
+                due_date = datetime(now.year, now.month, now.day, hour, minute, tzinfo=timezone.utc)
+            except (ValueError, AttributeError):
+                # If parsing fails, use end of day
+                due_date = datetime(now.year, now.month, now.day, 23, 59, tzinfo=timezone.utc)
+        else:
+            # No scheduled time, use end of day
+            due_date = datetime(now.year, now.month, now.day, 23, 59, tzinfo=timezone.utc)
+        
         # Create TaskCreate schema
         task_create = TaskCreate(
             title=subtask_data.title,
@@ -383,7 +398,7 @@ async def create_habit_with_subtasks(
             priority=priority,
             time_scope=TimeScope.daily,  # Habits are usually daily
             status=TaskStatus.pending,
-            due_date=datetime.now().date(),
+            due_date=due_date,
             scheduled_time=subtask_data.suggested_time,  # Already a string "HH:MM"
             task_group_id=task_group.id,
             is_recurring=subtask_data.is_recurring,

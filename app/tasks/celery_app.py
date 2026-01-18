@@ -29,6 +29,16 @@ celery_app.conf.beat_schedule = {
         'task': 'check_task_reminders',
         'schedule': crontab(minute=0),  # Every hour at minute 0
     },
+    # Send daily task summary every morning at 8:00 AM
+    'send-daily-task-summary': {
+        'task': 'send_daily_task_summary',
+        'schedule': crontab(hour=8, minute=0),  # Every day at 8:00 AM
+    },
+    # Check overdue tasks every 4 hours
+    'check-overdue-tasks': {
+        'task': 'check_overdue_tasks',
+        'schedule': crontab(hour='*/4', minute=0),  # Every 4 hours
+    },
     # Check pet health every 12 hours
     'check-pet-health': {
         'task': 'check_pet_health',

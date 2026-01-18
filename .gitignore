@@ -91,4 +91,6 @@ dump.rdb
 # Backup files
 *.bak
 *.backup
-uploads/
+
+# Firebase credentials
+firebase-credentials.json
