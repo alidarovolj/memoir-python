@@ -109,6 +109,7 @@ class TaskService:
             query.options(
                 joinedload(Task.category),
                 selectinload(Task.task_group),
+                selectinload(Task.subtasks),
             )
         )
         tasks = result.scalars().all()

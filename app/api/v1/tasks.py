@@ -3,11 +3,13 @@ from typing import Optional, List
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from pydantic import BaseModel
 
 from app.api.deps import get_current_user, get_db
 from app.models.user import User
-from app.models.task import TaskStatus, TaskPriority, TimeScope
+from app.models.task import Task as TaskModel, TaskStatus, TaskPriority, TimeScope
 from app.schemas.task import (
     Task,
     TaskCreate,
@@ -76,6 +78,20 @@ async def get_tasks(
     # Add category names and task group info
     tasks_with_category = []
     for task in tasks:
+        # Для экземпляров повторяющихся задач берем подзадачи из родительской задачи
+        subtasks_to_include = task.subtasks
+        if task.parent_task_id and not task.subtasks:
+            # Если это экземпляр и у него нет подзадач, загружаем из родительской задачи
+            parent_task_query = select(TaskModel).where(
+                TaskModel.id == task.parent_task_id
+            )
+            parent_result = await db.execute(
+                parent_task_query.options(selectinload(TaskModel.subtasks))
+            )
+            parent_task = parent_result.scalar_one_or_none()
+            if parent_task:
+                subtasks_to_include = parent_task.subtasks
+        
         task_dict = {
             "id": task.id,
             "user_id": task.user_id,
@@ -101,6 +117,19 @@ async def get_tasks(
             "is_recurring": task.is_recurring,
             "recurrence_rule": task.recurrence_rule,
             "parent_task_id": task.parent_task_id,
+            "subtasks": [
+                {
+                    "id": str(subtask.id),
+                    "task_id": str(subtask.task_id),
+                    "title": subtask.title,
+                    "is_completed": subtask.is_completed,
+                    "order": subtask.order,
+                    "created_at": subtask.created_at.isoformat() if subtask.created_at else None,
+                    "updated_at": subtask.updated_at.isoformat() if subtask.updated_at else None,
+                    "completed_at": subtask.completed_at.isoformat() if subtask.completed_at else None,
+                }
+                for subtask in subtasks_to_include
+            ],
             "created_at": task.created_at,
             "updated_at": task.updated_at,
         }
