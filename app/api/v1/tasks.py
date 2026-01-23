@@ -80,8 +80,8 @@ async def get_tasks(
     for task in tasks:
         # Для экземпляров повторяющихся задач берем подзадачи из родительской задачи
         subtasks_to_include = task.subtasks
-        if task.parent_task_id and not task.subtasks:
-            # Если это экземпляр и у него нет подзадач, загружаем из родительской задачи
+        if task.parent_task_id:
+            # Если это экземпляр повторяющейся задачи, всегда загружаем подзадачи из родительской задачи
             parent_task_query = select(TaskModel).where(
                 TaskModel.id == task.parent_task_id
             )
@@ -90,7 +90,21 @@ async def get_tasks(
             )
             parent_task = parent_result.scalar_one_or_none()
             if parent_task:
-                subtasks_to_include = parent_task.subtasks
+                if parent_task.subtasks:
+                    subtasks_to_include = parent_task.subtasks
+                    print(f"✅ [TASKS] Loaded {len(subtasks_to_include)} subtasks from parent task {task.parent_task_id} for instance {task.id}")
+                    for st in subtasks_to_include:
+                        print(f"   - Subtask: {st.title} (completed: {st.is_completed})")
+                else:
+                    print(f"⚠️ [TASKS] Parent task {task.parent_task_id} has no subtasks for instance {task.id}")
+            else:
+                print(f"❌ [TASKS] Parent task {task.parent_task_id} not found for instance {task.id}")
+        else:
+            # Для обычных задач используем их собственные подзадачи
+            if task.subtasks:
+                print(f"📝 [TASKS] Task {task.id} ({task.title}) has {len(task.subtasks)} own subtasks")
+                for st in task.subtasks:
+                    print(f"   - Subtask: {st.title} (completed: {st.is_completed})")
         
         task_dict = {
             "id": task.id,
