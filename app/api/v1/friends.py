@@ -83,7 +83,18 @@ async def user_to_friend_profile(user: User, db: AsyncSession) -> FriendProfile:
         created_at=user.created_at,
         memories_count=memories_count,
         friends_count=friends_count,
-        streak_days=0  # TODO: Calculate from user activity
+        streak_days=0,  # TODO: Calculate from user activity
+        # Personal data
+        profession=getattr(user, 'profession', None),
+        telegram_url=getattr(user, 'telegram_url', None),
+        whatsapp_url=getattr(user, 'whatsapp_url', None),
+        youtube_url=getattr(user, 'youtube_url', None),
+        linkedin_url=getattr(user, 'linkedin_url', None),
+        about_me=getattr(user, 'about_me', None),
+        city=getattr(user, 'city', None),
+        date_of_birth=getattr(user, 'date_of_birth', None),
+        education=getattr(user, 'education', None),
+        hobbies=getattr(user, 'hobbies', None),
     )
 
 

@@ -31,6 +31,18 @@ class User(Base):
     task_reminders_enabled = Column(Boolean, default=True, nullable=False)
     reminder_hours_before = Column(Integer, default=1, nullable=False)  # Напоминать за N часов до due_date
     
+    # Personal data fields
+    profession = Column(String(200), nullable=True)
+    telegram_url = Column(String(500), nullable=True)
+    whatsapp_url = Column(String(500), nullable=True)
+    youtube_url = Column(String(500), nullable=True)
+    linkedin_url = Column(String(500), nullable=True)
+    about_me = Column(String(2000), nullable=True)  # Text about user
+    city = Column(String(100), nullable=True)
+    date_of_birth = Column(DateTime, nullable=True)
+    education = Column(String(200), nullable=True)
+    hobbies = Column(String(500), nullable=True)
+    
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

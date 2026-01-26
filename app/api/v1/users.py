@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from pydantic import BaseModel
 from typing import Optional
+from datetime import datetime
 import shutil
 from pathlib import Path
 import uuid
@@ -343,4 +344,114 @@ async def send_test_notification(
         raise HTTPException(
             status_code=500,
             detail="Failed to send test notification"
+        )
+
+
+class PersonalDataResponse(BaseModel):
+    """Personal data response"""
+    profession: Optional[str] = None
+    telegram_url: Optional[str] = None
+    whatsapp_url: Optional[str] = None
+    youtube_url: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    about_me: Optional[str] = None
+    city: Optional[str] = None
+    date_of_birth: Optional[str] = None
+    education: Optional[str] = None
+    hobbies: Optional[str] = None
+
+
+class PersonalDataUpdate(BaseModel):
+    """Personal data update request"""
+    profession: Optional[str] = None
+    telegram_url: Optional[str] = None
+    whatsapp_url: Optional[str] = None
+    youtube_url: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    about_me: Optional[str] = None
+    city: Optional[str] = None
+    date_of_birth: Optional[str] = None
+    education: Optional[str] = None
+    hobbies: Optional[str] = None
+
+
+@router.get("/me/personal-data", response_model=PersonalDataResponse)
+async def get_personal_data(
+    current_user: User = Depends(get_current_user),
+):
+    """Get current user's personal data"""
+    return PersonalDataResponse(
+        profession=current_user.profession,
+        telegram_url=current_user.telegram_url,
+        whatsapp_url=current_user.whatsapp_url,
+        youtube_url=current_user.youtube_url,
+        linkedin_url=current_user.linkedin_url,
+        about_me=current_user.about_me,
+        city=current_user.city,
+        date_of_birth=current_user.date_of_birth.isoformat() if current_user.date_of_birth else None,
+        education=current_user.education,
+        hobbies=current_user.hobbies,
+    )
+
+
+@router.put("/me/personal-data")
+async def update_personal_data(
+    data: PersonalDataUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update current user's personal data"""
+    try:
+        # Update fields if provided
+        if data.profession is not None:
+            current_user.profession = data.profession if data.profession else None
+        if data.telegram_url is not None:
+            current_user.telegram_url = data.telegram_url if data.telegram_url else None
+        if data.whatsapp_url is not None:
+            current_user.whatsapp_url = data.whatsapp_url if data.whatsapp_url else None
+        if data.youtube_url is not None:
+            current_user.youtube_url = data.youtube_url if data.youtube_url else None
+        if data.linkedin_url is not None:
+            current_user.linkedin_url = data.linkedin_url if data.linkedin_url else None
+        if data.about_me is not None:
+            current_user.about_me = data.about_me if data.about_me else None
+        if data.city is not None:
+            current_user.city = data.city if data.city else None
+        if data.date_of_birth is not None:
+            if data.date_of_birth:
+                try:
+                    current_user.date_of_birth = datetime.fromisoformat(data.date_of_birth.replace('Z', '+00:00'))
+                except (ValueError, AttributeError):
+                    current_user.date_of_birth = None
+            else:
+                current_user.date_of_birth = None
+        if data.education is not None:
+            current_user.education = data.education if data.education else None
+        if data.hobbies is not None:
+            current_user.hobbies = data.hobbies if data.hobbies else None
+        
+        await db.commit()
+        await db.refresh(current_user)
+        
+        return {
+            "success": True,
+            "message": "Personal data updated successfully",
+            "data": PersonalDataResponse(
+                profession=current_user.profession,
+                telegram_url=current_user.telegram_url,
+                whatsapp_url=current_user.whatsapp_url,
+                youtube_url=current_user.youtube_url,
+                linkedin_url=current_user.linkedin_url,
+                about_me=current_user.about_me,
+                city=current_user.city,
+                date_of_birth=current_user.date_of_birth.isoformat() if current_user.date_of_birth else None,
+                education=current_user.education,
+                hobbies=current_user.hobbies,
+            )
+        }
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update personal data: {str(e)}"
         )

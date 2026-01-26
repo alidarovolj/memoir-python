@@ -28,6 +28,18 @@ class FriendProfile(BaseModel):
     memories_count: Optional[int] = 0
     friends_count: Optional[int] = 0
     streak_days: Optional[int] = 0
+    
+    # Personal data
+    profession: Optional[str] = None
+    telegram_url: Optional[str] = None
+    whatsapp_url: Optional[str] = None
+    youtube_url: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    about_me: Optional[str] = None
+    city: Optional[str] = None
+    date_of_birth: Optional[datetime] = None
+    education: Optional[str] = None
+    hobbies: Optional[str] = None
 
 
 # ============================================================================
