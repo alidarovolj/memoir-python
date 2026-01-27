@@ -323,9 +323,18 @@ async def respond_to_friend_request(
     """
     Accept or reject a friend request
     """
+    # Convert request_id from string to integer
+    try:
+        request_id_int = int(response.request_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid request_id format"
+        )
+    
     # Get the friendship request
     result = await db.execute(
-        select(Friendship).where(Friendship.id == response.request_id)
+        select(Friendship).where(Friendship.id == request_id_int)
     )
     friendship = result.scalar_one_or_none()
     
