@@ -26,6 +26,7 @@ app = FastAPI(
 uploads_dir = Path("uploads")
 uploads_dir.mkdir(exist_ok=True)
 (uploads_dir / "avatars").mkdir(exist_ok=True)
+(uploads_dir / "images").mkdir(exist_ok=True)
 
 # Mount static files for uploads
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")

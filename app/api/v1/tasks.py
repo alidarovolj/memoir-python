@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from app.api.deps import get_current_user, get_db
 from app.models.user import User
 from app.models.task import Task as TaskModel, TaskStatus, TaskPriority, TimeScope
+from app.models.subtask import Subtask
 from app.schemas.task import (
     Task,
     TaskCreate,
@@ -31,6 +32,7 @@ class SubtaskData(BaseModel):
     color: str | None = None
     icon: str | None = None
     is_recurring: bool = True
+    subtasks: List[str] = []  # Вложенные сабтаски (шаги для выполнения задачи)
 
 
 class CreateHabitRequest(BaseModel):
@@ -232,6 +234,27 @@ async def complete_task(
     Sets status to 'completed' and records completion timestamp
     """
     task = await TaskService.complete_task(db, task_id, current_user.id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    return {
+        **task.__dict__,
+        "category_name": task.category.name if task.category else None,
+    }
+
+
+@router.post("/{task_id}/uncomplete", response_model=Task)
+async def uncomplete_task(
+    task_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Mark task as not completed (revert completion)
+    
+    Sets status back to 'pending' and clears completion timestamp
+    """
+    task = await TaskService.uncomplete_task(db, task_id, current_user.id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
@@ -457,14 +480,39 @@ async def create_habit_with_subtasks(
             task_data=task_create,
         )
         
+        # Create subtasks for this task if provided
+        if subtask_data.subtasks:
+            for order, subtask_title in enumerate(subtask_data.subtasks):
+                subtask = Subtask(
+                    task_id=task.id,
+                    title=subtask_title,
+                    is_completed=False,
+                    order=order,
+                )
+                db.add(subtask)
+            await db.flush()  # Flush to get IDs
+        
         # Generate recurring instances if recurring
         if subtask_data.is_recurring:
-            await TaskService.generate_recurring_instances(
+            instances = await TaskService.generate_recurring_instances(
                 db=db,
                 task_id=task.id,
                 user_id=current_user.id,
                 days_ahead=7,
             )
+            
+            # Copy subtasks to all recurring instances
+            if subtask_data.subtasks and instances:
+                for instance in instances:
+                    for order, subtask_title in enumerate(subtask_data.subtasks):
+                        instance_subtask = Subtask(
+                            task_id=instance.id,
+                            title=subtask_title,
+                            is_completed=False,
+                            order=order,
+                        )
+                        db.add(instance_subtask)
+                await db.flush()
         
         created_subtasks.append({
             "id": str(task.id),

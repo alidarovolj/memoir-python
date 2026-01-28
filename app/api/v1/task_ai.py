@@ -43,6 +43,7 @@ class TaskSuggestion(BaseModel):
 class HabitAnalysisRequest(BaseModel):
     """Request for habit analysis"""
     title: str  # e.g., "Бросить курить", "Начать бегать"
+    subtasks_count: int | None = None  # Количество подзадач (None = AI решает сам)
 
 
 class SubtaskSuggestion(BaseModel):
@@ -54,6 +55,7 @@ class SubtaskSuggestion(BaseModel):
     color: str  # Hex color
     icon: str  # Ionicons name
     is_recurring: bool = True  # Most habit subtasks are daily
+    subtasks: List[str] = []  # Вложенные сабтаски (шаги для выполнения задачи)
 
 
 class HabitAnalysisResponse(BaseModel):
@@ -139,11 +141,14 @@ async def analyze_habit(
     **Returns:**
     - Название группы
     - Иконка группы (emoji)
-    - Список подзадач (4-6 штук)
-    - Каждая подзадача с title, description, priority, suggested_time, color, icon
+    - Список подзадач (AI определяет оптимальное количество, если subtasks_count не указан)
+    - Каждая подзадача с title, description, priority, suggested_time, color, icon, subtasks (вложенные шаги)
     """
     ai_service = TaskAIService()
-    result = await ai_service.analyze_habit(request.title)
+    result = await ai_service.analyze_habit(
+        request.title, 
+        subtasks_count=request.subtasks_count
+    )
     
     return result
 

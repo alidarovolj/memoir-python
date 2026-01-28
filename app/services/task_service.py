@@ -211,6 +211,26 @@ class TaskService:
         return task
 
     @staticmethod
+    async def uncomplete_task(
+        db: AsyncSession,
+        task_id: UUID,
+        user_id: UUID,
+    ) -> Optional[Task]:
+        """Mark task as not completed (revert completion)"""
+        task = await TaskService.get_task_by_id(db, task_id, user_id)
+        if not task:
+            return None
+
+        task.status = TaskStatus.pending
+        task.completed_at = None
+        task.updated_at = datetime.utcnow()
+
+        await db.commit()
+        await db.refresh(task)
+
+        return task
+
+    @staticmethod
     async def delete_task(
         db: AsyncSession,
         task_id: UUID,

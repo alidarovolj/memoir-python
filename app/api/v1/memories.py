@@ -33,13 +33,25 @@ async def get_memories(
         limit=size,
     )
     
-    # Add category_name to each memory
+    # Convert memories to dict format with category_name and stats
     items_with_category = []
     for memory in memories:
-        memory_dict = {
-            **memory.__dict__,
-            "category_name": memory.category.name if memory.category else None,
-        }
+        # Use Pydantic schema for proper serialization
+        from app.schemas.memory import Memory
+        memory_dict = Memory.model_validate(memory).model_dump()
+        memory_dict["category_name"] = memory.category.name if memory.category else None
+        
+        # Get stats for memory
+        stats = await MemoryService.get_memory_stats(
+            db,
+            memory_id=str(memory.id),
+            user_id=str(current_user.id),
+        )
+        memory_dict.update(stats)
+        
+        # Debug: логируем данные изображения и аудио
+        if memory.image_url or memory.backdrop_url or memory.audio_url:
+            print(f"🖼️ [API] Memory '{memory.title}': image_url={memory.image_url}, backdrop_url={memory.backdrop_url}, audio_url={memory.audio_url}")
         items_with_category.append(memory_dict)
     
     pages = math.ceil(total / size) if total > 0 else 0
@@ -72,6 +84,8 @@ async def create_memory(
             memory_data=memory_data,
         )
         print(f"✅ [API] Memory created with ID: {memory.id}")
+        print(f"🖼️ [API] Memory image_url: {memory.image_url}")
+        print(f"🖼️ [API] Memory backdrop_url: {memory.backdrop_url}")
         
         # Trigger background AI processing
         print(f"🤖 [API] Triggering AI processing...")
@@ -115,11 +129,10 @@ async def get_throwback_memory(
     if not memory:
         return None  # Возвращаем null вместо 404
     
-    # Add category name
-    memory_dict = {
-        **memory.__dict__,
-        "category_name": memory.category.name if memory.category else None,
-    }
+    # Convert to dict format with category_name
+    from app.schemas.memory import Memory
+    memory_dict = Memory.model_validate(memory).model_dump()
+    memory_dict["category_name"] = memory.category.name if memory.category else None
     
     return memory_dict
 
@@ -143,6 +156,21 @@ async def get_memory(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Memory not found",
         )
+
+
+@router.get("/by-task/{task_id}/exists")
+async def check_memory_exists_for_task(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Check if there is a memory linked to this task"""
+    has_memory = await MemoryService.has_memory_for_task(
+        db,
+        task_id=task_id,
+        user_id=str(current_user.id),
+    )
+    return {"has_memory": has_memory}
 
 
 @router.put("/{memory_id}", response_model=Memory)

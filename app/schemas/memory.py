@@ -13,6 +13,8 @@ class MemoryBase(BaseModel):
     source_url: Optional[str] = None
     image_url: Optional[str] = None  # For posters/covers
     backdrop_url: Optional[str] = None  # For backdrop images
+    audio_url: Optional[str] = None  # For voice notes
+    audio_transcript: Optional[str] = None  # Whisper transcription
     
     class Config:
         populate_by_name = True
@@ -22,6 +24,7 @@ class MemoryCreate(MemoryBase):
     """Memory creation schema"""
     category_id: Optional[UUID] = None
     memory_metadata: Optional[Dict[str, Any]] = None
+    related_task_id: Optional[UUID] = None  # Привязка к задаче, если воспоминание создано из задачи
 
 
 class MemoryUpdate(BaseModel):
@@ -42,6 +45,8 @@ class MemoryInDB(MemoryBase):
     related_task_id: Optional[UUID] = None
     image_url: Optional[str] = None
     backdrop_url: Optional[str] = None
+    audio_url: Optional[str] = None
+    audio_transcript: Optional[str] = None
     memory_metadata: Dict[str, Any] = {}
     ai_confidence: Optional[float]
     tags: List[str] = []
