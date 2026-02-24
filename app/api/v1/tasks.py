@@ -11,6 +11,7 @@ from app.api.deps import get_current_user, get_db
 from app.models.user import User
 from app.models.task import Task as TaskModel, TaskStatus, TaskPriority, TimeScope
 from app.models.subtask import Subtask
+from app.models.subtask_completion import SubtaskCompletion
 from app.schemas.task import (
     Task,
     TaskCreate,
@@ -82,8 +83,9 @@ async def get_tasks(
     for task in tasks:
         # Для экземпляров повторяющихся задач берем подзадачи из родительской задачи
         subtasks_to_include = task.subtasks
+        completion_map: dict = {}  # subtask_id -> SubtaskCompletion (для экземпляров)
         if task.parent_task_id:
-            # Если это экземпляр повторяющейся задачи, всегда загружаем подзадачи из родительской задачи
+            # Если это экземпляр повторяющейся задачи, загружаем подзадачи из родителя
             parent_task_query = select(TaskModel).where(
                 TaskModel.id == task.parent_task_id
             )
@@ -91,23 +93,28 @@ async def get_tasks(
                 parent_task_query.options(selectinload(TaskModel.subtasks))
             )
             parent_task = parent_result.scalar_one_or_none()
-            if parent_task:
-                if parent_task.subtasks:
-                    subtasks_to_include = parent_task.subtasks
-                    print(f"✅ [TASKS] Loaded {len(subtasks_to_include)} subtasks from parent task {task.parent_task_id} for instance {task.id}")
-                    for st in subtasks_to_include:
-                        print(f"   - Subtask: {st.title} (completed: {st.is_completed})")
-                else:
-                    print(f"⚠️ [TASKS] Parent task {task.parent_task_id} has no subtasks for instance {task.id}")
-            else:
-                print(f"❌ [TASKS] Parent task {task.parent_task_id} not found for instance {task.id}")
+            if parent_task and parent_task.subtasks:
+                subtasks_to_include = parent_task.subtasks
+                # Загружаем subtask_completions для этого экземпляра
+                comp_query = select(SubtaskCompletion).where(
+                    SubtaskCompletion.task_id == task.id,
+                    SubtaskCompletion.subtask_id.in_([s.id for s in parent_task.subtasks]),
+                )
+                comp_result = await db.execute(comp_query)
+                completion_map = {c.subtask_id: c for c in comp_result.scalars().all()}
         else:
-            # Для обычных задач используем их собственные подзадачи
-            if task.subtasks:
-                print(f"📝 [TASKS] Task {task.id} ({task.title}) has {len(task.subtasks)} own subtasks")
-                for st in task.subtasks:
-                    print(f"   - Subtask: {st.title} (completed: {st.is_completed})")
-        
+            subtasks_to_include = task.subtasks
+
+        def _subtask_is_completed(st):
+            if task.parent_task_id and st.id in completion_map:
+                return True
+            return st.is_completed
+
+        def _subtask_completed_at(st):
+            if task.parent_task_id and st.id in completion_map:
+                return completion_map[st.id].completed_at
+            return st.completed_at
+
         task_dict = {
             "id": task.id,
             "user_id": task.user_id,
@@ -136,13 +143,13 @@ async def get_tasks(
             "subtasks": [
                 {
                     "id": str(subtask.id),
-                    "task_id": str(subtask.task_id),
+                    "task_id": str(task.id if task.parent_task_id else subtask.task_id),
                     "title": subtask.title,
-                    "is_completed": subtask.is_completed,
+                    "is_completed": _subtask_is_completed(subtask),
                     "order": subtask.order,
                     "created_at": subtask.created_at.isoformat() if subtask.created_at else None,
                     "updated_at": subtask.updated_at.isoformat() if subtask.updated_at else None,
-                    "completed_at": subtask.completed_at.isoformat() if subtask.completed_at else None,
+                    "completed_at": (_subtask_completed_at(subtask).isoformat() if _subtask_completed_at(subtask) else None),
                 }
                 for subtask in subtasks_to_include
             ],

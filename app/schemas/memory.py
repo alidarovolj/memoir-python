@@ -25,6 +25,7 @@ class MemoryCreate(MemoryBase):
     category_id: Optional[UUID] = None
     memory_metadata: Optional[Dict[str, Any]] = None
     related_task_id: Optional[UUID] = None  # Привязка к задаче, если воспоминание создано из задачи
+    privacy_level: Optional[str] = None  # private, friends_only, shared, public. Default: friends_only
 
 
 class MemoryUpdate(BaseModel):
@@ -66,9 +67,34 @@ class MemoryWithCategory(Memory):
     category: Optional["Category"] = None
 
 
+class MemoryFeedItem(Memory):
+    """Memory item for the feed — includes author info and engagement stats."""
+    owner_id: Optional[str] = None
+    owner_username: Optional[str] = None
+    owner_first_name: Optional[str] = None
+    owner_last_name: Optional[str] = None
+    owner_avatar_url: Optional[str] = None
+    is_own: bool = True
+    is_friend: bool = False
+    reactions_count: int = 0
+    comments_count: int = 0
+    shares_count: int = 0
+    views_count: int = 0
+    is_reacted: bool = False
+
+
 class MemoryList(BaseModel):
     """Paginated memory list"""
     items: List[Memory]
+    total: int
+    page: int
+    size: int
+    pages: int
+
+
+class MemoryFeedList(BaseModel):
+    """Paginated feed list with author info"""
+    items: List[MemoryFeedItem]
     total: int
     page: int
     size: int

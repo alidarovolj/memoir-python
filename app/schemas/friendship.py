@@ -28,6 +28,7 @@ class FriendProfile(BaseModel):
     memories_count: Optional[int] = 0
     friends_count: Optional[int] = 0
     streak_days: Optional[int] = 0
+    unread_messages_count: Optional[int] = 0
     
     # Personal data
     profession: Optional[str] = None

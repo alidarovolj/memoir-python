@@ -1,10 +1,10 @@
 """Memory service"""
 from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_
+from sqlalchemy import select, func, and_, or_
 from sqlalchemy.orm import selectinload
 from uuid import UUID
-from app.models.memory import Memory
+from app.models.memory import Memory, PrivacyLevel
 from app.models.category import Category
 from app.models.memory_reactions import MemoryReaction, MemoryComment
 from app.models.memory_share import memory_shares
@@ -30,6 +30,14 @@ class MemoryService:
             if not result.scalar_one_or_none():
                 raise NotFoundError("Category not found")
         
+        # По умолчанию — друзьям видно (общие воспоминания)
+        privacy = PrivacyLevel.FRIENDS_ONLY
+        if memory_data.privacy_level:
+            try:
+                privacy = PrivacyLevel(memory_data.privacy_level)
+            except ValueError:
+                pass
+
         new_memory = Memory(
             user_id=user_id,
             title=memory_data.title,
@@ -43,6 +51,7 @@ class MemoryService:
             memory_metadata=memory_data.memory_metadata or {},
             category_id=memory_data.category_id,
             related_task_id=memory_data.related_task_id,
+            privacy_level=privacy,
         )
         
         print(f"✅ [SERVICE] Memory object created:")
@@ -175,14 +184,102 @@ class MemoryService:
         memories = result.scalars().all()
         
         return list(memories), total
-    
+
+    @staticmethod
+    async def get_memories_feed(
+        db: AsyncSession,
+        current_user_id: str,
+        category_id: Optional[str] = None,
+        skip: int = 0,
+        limit: int = 50,
+    ) -> tuple[List[Memory], int]:
+        """
+        Лента воспоминаний с приоритетной сортировкой:
+          0 — свои (все)
+          1 — воспоминания друзей (friends_only / public)
+          2 — публичные воспоминания всех остальных пользователей
+        Внутри каждой группы — по дате убывания.
+        """
+        from app.models.friendship import Friendship, FriendshipStatus
+        from sqlalchemy import case
+
+        # ID друзей
+        friendships_result = await db.execute(
+            select(Friendship).where(
+                or_(
+                    Friendship.requester_id == UUID(current_user_id),
+                    Friendship.addressee_id == UUID(current_user_id),
+                ),
+                Friendship.status == FriendshipStatus.ACCEPTED,
+            )
+        )
+        friendships = friendships_result.scalars().all()
+        friend_ids = set()
+        for f in friendships:
+            uid = UUID(current_user_id)
+            friend_ids.add(
+                str(f.addressee_id) if f.requester_id == uid else str(f.requester_id)
+            )
+        friend_uuids = [UUID(fid) for fid in friend_ids]
+
+        # Условие выборки:
+        # — свои (любой privacy)
+        # — друзей (friends_only или public)
+        # — публичные всех остальных
+        feed_conditions = [
+            Memory.user_id == UUID(current_user_id),
+            Memory.privacy_level == PrivacyLevel.PUBLIC,
+        ]
+        if friend_uuids:
+            feed_conditions.append(
+                and_(
+                    Memory.user_id.in_(friend_uuids),
+                    Memory.privacy_level.in_(
+                        [PrivacyLevel.FRIENDS_ONLY, PrivacyLevel.PUBLIC]
+                    ),
+                )
+            )
+        feed_cond = or_(*feed_conditions)
+        if category_id:
+            feed_cond = and_(feed_cond, Memory.category_id == category_id)
+
+        # Приоритет для сортировки
+        priority_cases = [(Memory.user_id == UUID(current_user_id), 0)]
+        if friend_uuids:
+            priority_cases.append((Memory.user_id.in_(friend_uuids), 1))
+        priority_expr = case(*priority_cases, else_=2)
+
+        # Общее количество
+        count_query = select(func.count()).select_from(Memory).where(feed_cond)
+        total_result = await db.execute(count_query)
+        total = total_result.scalar() or 0
+
+        if total == 0:
+            return [], 0
+
+        # Основной запрос с сортировкой и пагинацией
+        query = (
+            select(Memory)
+            .where(feed_cond)
+            .options(
+                selectinload(Memory.category),
+                selectinload(Memory.user),
+            )
+            .order_by(priority_expr, Memory.created_at.desc())
+            .offset(skip)
+            .limit(limit)
+        )
+        result = await db.execute(query)
+        memories = result.scalars().all()
+        return list(memories), total
+
     @staticmethod
     async def get_memory_by_id(
         db: AsyncSession,
         memory_id: str,
         user_id: str,
     ) -> Memory:
-        """Get memory by ID"""
+        """Get memory by ID (owner only - for edit/delete)."""
         query = select(Memory).where(
             and_(Memory.id == memory_id, Memory.user_id == user_id)
         ).options(selectinload(Memory.category))
@@ -194,6 +291,46 @@ class MemoryService:
             raise NotFoundError("Memory not found")
         
         return memory
+
+    @staticmethod
+    async def get_memory_by_id_with_access(
+        db: AsyncSession,
+        memory_id: str,
+        current_user_id: str,
+    ) -> Memory:
+        """Get memory by ID if current user has access (owner, friend for friends_only, anyone for public)."""
+        query = select(Memory).where(Memory.id == memory_id).options(
+            selectinload(Memory.category)
+        )
+        result = await db.execute(query)
+        memory = result.scalar_one_or_none()
+        if not memory:
+            raise NotFoundError("Memory not found")
+
+        if str(memory.user_id) == current_user_id:
+            return memory
+        if memory.privacy_level == PrivacyLevel.PUBLIC:
+            return memory
+        if memory.privacy_level == PrivacyLevel.FRIENDS_ONLY:
+            from app.models.friendship import Friendship, FriendshipStatus
+            friend_check = await db.execute(
+                select(Friendship).where(
+                    or_(
+                        and_(
+                            Friendship.requester_id == memory.user_id,
+                            Friendship.addressee_id == UUID(current_user_id),
+                        ),
+                        and_(
+                            Friendship.requester_id == UUID(current_user_id),
+                            Friendship.addressee_id == memory.user_id,
+                        ),
+                    ),
+                    Friendship.status == FriendshipStatus.ACCEPTED,
+                )
+            )
+            if friend_check.scalar_one_or_none():
+                return memory
+        raise NotFoundError("Memory not found")
     
     @staticmethod
     async def has_memory_for_task(

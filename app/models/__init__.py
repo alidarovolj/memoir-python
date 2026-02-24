@@ -10,6 +10,7 @@ from app.models.story_share import StoryShare
 from app.models.task import Task
 from app.models.task_group import TaskGroup
 from app.models.subtask import Subtask
+from app.models.subtask_completion import SubtaskCompletion
 from app.models.pet import Pet
 from app.models.pet_item import PetItem, UserPetItem
 from app.models.friendship import Friendship, FriendshipStatus
@@ -32,6 +33,7 @@ __all__ = [
     "Task",
     "TaskGroup",
     "Subtask",
+    "SubtaskCompletion",
     "Pet",
     "PetItem",
     "UserPetItem",

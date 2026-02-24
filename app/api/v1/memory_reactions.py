@@ -39,32 +39,39 @@ async def add_reaction(
     db: AsyncSession = Depends(get_db)
 ):
     """Add or update reaction to memory"""
-    # Check if user already reacted
-    result = await db.execute(
-        select(MemoryReaction).where(
-            and_(
-                MemoryReaction.memory_id == request.memory_id,
-                MemoryReaction.user_id == current_user.id
+    try:
+        # Check if user already reacted
+        result = await db.execute(
+            select(MemoryReaction).where(
+                and_(
+                    MemoryReaction.memory_id == request.memory_id,
+                    MemoryReaction.user_id == current_user.id
+                )
             )
         )
-    )
-    existing = result.scalar_one_or_none()
+        existing = result.scalar_one_or_none()
+        
+        if existing:
+            # Update reaction type
+            existing.reaction_type = request.reaction_type
+        else:
+            # Create new reaction
+            reaction = MemoryReaction(
+                memory_id=request.memory_id,
+                user_id=current_user.id,
+                reaction_type=request.reaction_type
+            )
+            db.add(reaction)
+        
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to add reaction: {str(e)}",
+        ) from e
     
-    if existing:
-        # Update reaction type
-        existing.reaction_type = request.reaction_type
-    else:
-        # Create new reaction
-        reaction = MemoryReaction(
-            memory_id=request.memory_id,
-            user_id=current_user.id,
-            reaction_type=request.reaction_type
-        )
-        db.add(reaction)
-    
-    await db.commit()
-    
-    # Get summary
+    # Get summary in a new "context" after commit
     summary = await get_reactions_summary(db, request.memory_id, current_user.id)
     
     return ReactionActionResponse(
@@ -82,15 +89,22 @@ async def remove_reaction(
     db: AsyncSession = Depends(get_db)
 ):
     """Remove reaction from memory"""
-    await db.execute(
-        delete(MemoryReaction).where(
-            and_(
-                MemoryReaction.memory_id == request.memory_id,
-                MemoryReaction.user_id == current_user.id
+    try:
+        await db.execute(
+            delete(MemoryReaction).where(
+                and_(
+                    MemoryReaction.memory_id == request.memory_id,
+                    MemoryReaction.user_id == current_user.id
+                )
             )
         )
-    )
-    await db.commit()
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to remove reaction: {str(e)}",
+        ) from e
     
     summary = await get_reactions_summary(db, request.memory_id, current_user.id)
     
@@ -139,7 +153,16 @@ async def get_reactions_summary(
             )
         )
     )
-    user_reaction = user_reaction_result.scalar_one_or_none()
+    raw_user = user_reaction_result.scalar_one_or_none()
+    user_reaction = None
+    if raw_user is not None:
+        if isinstance(raw_user, ReactionType):
+            user_reaction = raw_user
+        else:
+            try:
+                user_reaction = ReactionType(str(raw_user).lower())
+            except ValueError:
+                pass
     
     return ReactionsSummary(
         like=counts.get(ReactionType.LIKE, 0),

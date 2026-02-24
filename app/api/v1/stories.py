@@ -119,6 +119,78 @@ async def get_public_stories(
     return {"items": stories_with_details, "total": total}
 
 
+@router.get("/timeline", response_model=StoryList)
+async def get_stories_feed(
+    skip: int = 0,
+    limit: int = 50,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Получить ленту историй: свои + истории друзей (публичные).
+    """
+    stories, total = await StoryService.get_stories_feed(
+        db=db,
+        current_user_id=str(current_user.id),
+        skip=skip,
+        limit=limit,
+    )
+
+    stories_with_details = []
+    for story in stories:
+        stats = await StoryService.get_story_stats(
+            db=db,
+            story_id=str(story.id),
+            current_user_id=str(current_user.id),
+        )
+
+        story_dict = {
+            "id": story.id,
+            "user_id": story.user_id,
+            "memory_id": story.memory_id,
+            "is_public": story.is_public,
+            "created_at": story.created_at,
+            "expires_at": story.expires_at,
+            "user": {
+                "id": str(story.user.id),
+                "username": story.user.username,
+                "email": story.user.email,
+                "first_name": story.user.first_name,
+                "last_name": story.user.last_name,
+                "avatar_url": story.user.avatar_url,
+            },
+            "memory": {
+                "id": str(story.memory.id),
+                "title": story.memory.title,
+                "content": story.memory.content[:200] + "..." if len(story.memory.content) > 200 else story.memory.content,
+                "image_url": story.memory.image_url,
+                "backdrop_url": story.memory.backdrop_url,
+                "source_type": story.memory.source_type,
+            },
+            **stats,
+        }
+
+        if story.original_story_id:
+            try:
+                if story.original_story and story.original_story.user:
+                    story_dict["original_story"] = {
+                        "id": str(story.original_story.id),
+                        "user": {
+                            "id": str(story.original_story.user.id),
+                            "username": story.original_story.user.username,
+                            "first_name": story.original_story.user.first_name,
+                            "last_name": story.original_story.user.last_name,
+                            "avatar_url": story.original_story.user.avatar_url,
+                        },
+                    }
+            except Exception as e:
+                logger.warning(f"Could not load original story {story.original_story_id}: {e}")
+
+        stories_with_details.append(story_dict)
+
+    return {"items": stories_with_details, "total": total}
+
+
 @router.get("/my", response_model=StoryList)
 async def get_my_stories(
     skip: int = 0,

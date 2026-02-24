@@ -1,13 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, and_, func
-from typing import List
+from typing import List, Optional
+from uuid import UUID
 
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.user import User
 from app.models.friendship import Friendship, FriendshipStatus
 from app.models.memory import Memory
+from app.models.message import Message
 from app.schemas.friendship import (
     FriendRequestCreate,
     FriendRequestResponse,
@@ -52,14 +54,16 @@ async def get_friendship_between_users(
     return result.scalar_one_or_none()
 
 
-async def user_to_friend_profile(user: User, db: AsyncSession) -> FriendProfile:
+async def user_to_friend_profile(
+    user: User, db: AsyncSession, current_user_id: Optional[UUID] = None
+) -> FriendProfile:
     """Convert User model to FriendProfile with stats"""
     # Count memories
     memories_count_result = await db.execute(
         select(func.count()).select_from(Memory).where(Memory.user_id == user.id)
     )
     memories_count = memories_count_result.scalar() or 0
-    
+
     # Count friends
     friends_count_result = await db.execute(
         select(func.count()).select_from(Friendship).where(
@@ -73,7 +77,21 @@ async def user_to_friend_profile(user: User, db: AsyncSession) -> FriendProfile:
         )
     )
     friends_count = friends_count_result.scalar() or 0
-    
+
+    # Count unread messages from this friend to current user
+    unread_messages_count = 0
+    if current_user_id is not None:
+        unread_result = await db.execute(
+            select(func.count()).select_from(Message).where(
+                and_(
+                    Message.sender_id == user.id,
+                    Message.receiver_id == current_user_id,
+                    Message.is_read == False,
+                )
+            )
+        )
+        unread_messages_count = unread_result.scalar() or 0
+
     return FriendProfile(
         id=str(user.id),  # Convert UUID to string
         username=user.username or "",
@@ -84,6 +102,7 @@ async def user_to_friend_profile(user: User, db: AsyncSession) -> FriendProfile:
         memories_count=memories_count,
         friends_count=friends_count,
         streak_days=0,  # TODO: Calculate from user activity
+        unread_messages_count=unread_messages_count,
         # Personal data
         profession=getattr(user, 'profession', None),
         telegram_url=getattr(user, 'telegram_url', None),
@@ -141,10 +160,10 @@ async def get_friends(
     )
     friends = friends_result.scalars().all()
     
-    # Convert to FriendProfile
+    # Convert to FriendProfile (with unread messages count for list)
     friend_profiles = []
     for friend in friends:
-        profile = await user_to_friend_profile(friend, db)
+        profile = await user_to_friend_profile(friend, db, current_user_id=current_user.id)
         friend_profiles.append(profile)
     
     return FriendsList(
@@ -182,7 +201,7 @@ async def get_friend_requests(
             select(User).where(User.id == req.requester_id)
         )
         requester = requester_result.scalar_one()
-        requester_profile = await user_to_friend_profile(requester, db)
+        requester_profile = await user_to_friend_profile(requester, db, current_user_id=current_user.id)
         
         request_list.append(
             FriendRequestOut(
@@ -224,7 +243,7 @@ async def get_sent_friend_requests(
             select(User).where(User.id == req.addressee_id)
         )
         addressee = addressee_result.scalar_one()
-        addressee_profile = await user_to_friend_profile(addressee, db)
+        addressee_profile = await user_to_friend_profile(addressee, db, current_user_id=current_user.id)
         
         request_list.append(
             FriendRequestOut(
@@ -455,10 +474,10 @@ async def search_users(
     result = await db.execute(query)
     users = result.scalars().all()
     
-    # Convert to FriendProfile
+    # Convert to FriendProfile (with unread messages count)
     user_profiles = []
     for user in users:
-        profile = await user_to_friend_profile(user, db)
+        profile = await user_to_friend_profile(user, db, current_user_id=current_user.id)
         user_profiles.append(profile)
     
     # Get total count
@@ -545,10 +564,10 @@ async def get_user_suggestions(
     result = await db.execute(suggestions_query)
     users = result.scalars().all()
     
-    # Convert to FriendProfile
+    # Convert to FriendProfile (with unread messages count)
     user_profiles = []
     for user in users:
-        profile = await user_to_friend_profile(user, db)
+        profile = await user_to_friend_profile(user, db, current_user_id=current_user.id)
         user_profiles.append(profile)
     
     return UserSearchResult(
@@ -608,10 +627,10 @@ async def get_all_users(
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0
     
-    # Convert to FriendProfile
+    # Convert to FriendProfile (with unread messages count)
     user_profiles = []
     for user in users:
-        profile = await user_to_friend_profile(user, db)
+        profile = await user_to_friend_profile(user, db, current_user_id=current_user.id)
         user_profiles.append(profile)
     
     return UserSearchResult(

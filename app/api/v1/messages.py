@@ -14,6 +14,7 @@ from app.models.user import User
 from app.models.message import Message
 from app.models.friendship import Friendship, FriendshipStatus
 from app.schemas.message import MessageCreate, MessageOut, MessageListResponse, WebSocketMessage
+from pydantic import BaseModel
 
 router = APIRouter()
 
@@ -182,7 +183,7 @@ async def websocket_endpoint(
                         }, user_id)
                 
                 elif ws_message.type == "read":
-                    # Mark message as read
+                    # Mark message as read and notify sender
                     if ws_message.message_id:
                         try:
                             result = await db.execute(
@@ -198,6 +199,14 @@ async def websocket_endpoint(
                                 message.is_read = True
                                 message.read_at = datetime.utcnow()
                                 await db.commit()
+                                # Notify sender that their message was read
+                                await manager.send_personal_message({
+                                    "type": "message_read",
+                                    "message_id": str(message.id),
+                                    "is_read": True,
+                                    "read_at": message.read_at.isoformat(),
+                                }, message.sender_id)
+                                print(f"✅ [WebSocket] Message {message.id} marked read, notified sender")
                         except Exception as e:
                             print(f"❌ [WebSocket] Error marking message as read: {e}")
                 
@@ -271,6 +280,86 @@ async def send_message(
     return MessageOut.from_orm(message)
 
 
+class MarkReadRequest(BaseModel):
+    message_ids: List[UUID]
+
+
+@router.post("/mark-read")
+async def mark_messages_as_read(
+    body: MarkReadRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Mark multiple messages as read (messages must be sent TO current_user)
+    """
+    result = await db.execute(
+        select(Message).where(
+            and_(
+                Message.id.in_(body.message_ids),
+                Message.receiver_id == current_user.id,
+                Message.is_read == False,
+            )
+        )
+    )
+    messages = result.scalars().all()
+    print(f"📖 [REST API] Marking {len(messages)} messages as read for user {current_user.id}")
+    for msg in messages:
+        msg.is_read = True
+        msg.read_at = datetime.utcnow()
+        print(f"📖 [REST API] Message {msg.id} marked read. Sender: {msg.sender_id}, Receiver: {msg.receiver_id}")
+        # Notify sender that their message was read
+        await manager.send_personal_message({
+            "type": "message_read",
+            "message_id": str(msg.id),
+            "is_read": True,
+            "read_at": msg.read_at.isoformat(),
+        }, msg.sender_id)
+        print(f"✅ [REST API] Sent message_read event to sender {msg.sender_id} for message {msg.id}")
+    await db.commit()
+    print(f"✅ [REST API] Committed {len(messages)} messages as read")
+    return {"success": True, "marked_count": len(messages)}
+
+
+@router.post("/read/{message_id}")
+async def mark_message_as_read(
+    message_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Mark a message as read
+    """
+    result = await db.execute(
+        select(Message).where(
+            and_(
+                Message.id == message_id,
+                Message.receiver_id == current_user.id
+            )
+        )
+    )
+    message = result.scalar_one_or_none()
+
+    if not message:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Message not found"
+        )
+
+    message.is_read = True
+    message.read_at = datetime.utcnow()
+    await db.commit()
+
+    await manager.send_personal_message({
+        "type": "message_read",
+        "message_id": str(message.id),
+        "is_read": True,
+        "read_at": message.read_at.isoformat(),
+    }, message.sender_id)
+
+    return {"success": True}
+
+
 @router.get("/{friend_id}", response_model=MessageListResponse)
 async def get_messages(
     friend_id: UUID,
@@ -336,35 +425,3 @@ async def get_messages(
         page=page,
         page_size=page_size
     )
-
-
-@router.post("/read/{message_id}")
-async def mark_message_as_read(
-    message_id: UUID,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Mark a message as read
-    """
-    result = await db.execute(
-        select(Message).where(
-            and_(
-                Message.id == message_id,
-                Message.receiver_id == current_user.id
-            )
-        )
-    )
-    message = result.scalar_one_or_none()
-    
-    if not message:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Message not found"
-        )
-    
-    message.is_read = True
-    message.read_at = datetime.utcnow()
-    await db.commit()
-    
-    return {"success": True}

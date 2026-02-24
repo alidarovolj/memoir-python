@@ -6,6 +6,7 @@ from sqlalchemy import select, and_, func, or_
 from sqlalchemy.orm import selectinload
 from app.models.story import Story
 from app.models.story_like import StoryLike
+from app.models.friendship import Friendship, FriendshipStatus
 from app.models.story_comment import StoryComment
 from app.models.story_share import StoryShare
 from app.models.memory import Memory
@@ -101,7 +102,78 @@ class StoryService:
         stories = result.scalars().all()
         
         return list(stories), total
-    
+
+    @staticmethod
+    async def get_stories_feed(
+        db: AsyncSession,
+        current_user_id: str,
+        skip: int = 0,
+        limit: int = 50,
+    ) -> tuple[List[Story], int]:
+        """
+        Get stories feed: own stories + friends' public stories.
+        Ordered by created_at desc (newest first).
+        """
+        from uuid import UUID
+
+        now = datetime.utcnow()
+
+        # Get friend IDs
+        friendships_result = await db.execute(
+            select(Friendship).where(
+                or_(
+                    Friendship.requester_id == UUID(current_user_id),
+                    Friendship.addressee_id == UUID(current_user_id),
+                ),
+                Friendship.status == FriendshipStatus.ACCEPTED,
+            )
+        )
+        friendships = friendships_result.scalars().all()
+        friend_ids = set()
+        for f in friendships:
+            uid = UUID(current_user_id)
+            if f.requester_id == uid:
+                friend_ids.add(str(f.addressee_id))
+            else:
+                friend_ids.add(str(f.requester_id))
+
+        # Stories: not expired + (own all) OR (friend's public)
+        feed_cond = and_(
+            Story.expires_at > now,
+            or_(
+                Story.user_id == UUID(current_user_id),
+                and_(
+                    Story.user_id.in_([UUID(fid) for fid in friend_ids]),
+                    Story.is_public == True,
+                ),
+            ),
+        )
+
+        query = (
+            select(Story)
+            .where(feed_cond)
+            .options(
+                selectinload(Story.user),
+                selectinload(Story.memory),
+                selectinload(Story.original_story).selectinload(Story.user),
+            )
+            .order_by(Story.created_at.desc())
+        )
+
+        count_query = (
+            select(func.count())
+            .select_from(Story)
+            .where(feed_cond)
+        )
+        total_result = await db.execute(count_query)
+        total = total_result.scalar()
+
+        query = query.offset(skip).limit(limit)
+        result = await db.execute(query)
+        stories = result.scalars().all()
+
+        return list(stories), total
+
     @staticmethod
     async def get_user_stories(
         db: AsyncSession,

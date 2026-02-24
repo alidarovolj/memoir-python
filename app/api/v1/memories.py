@@ -6,12 +6,70 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.api.deps import get_current_user
 from app.models.user import User
-from app.schemas.memory import Memory, MemoryCreate, MemoryUpdate, MemoryList
+from app.schemas.memory import Memory, MemoryCreate, MemoryUpdate, MemoryList, MemoryFeedList
 from app.services.memory_service import MemoryService
 from app.core.exceptions import NotFoundError
 import math
 
 router = APIRouter()
+
+
+@router.get("/timeline", response_model=MemoryFeedList)
+async def get_memories_feed(
+    category_id: Optional[str] = Query(None, description="Filter by category ID"),
+    page: int = Query(1, ge=1, description="Page number"),
+    size: int = Query(50, ge=1, le=100, description="Page size"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Лента воспоминаний: свои + друзей (friends_only, public)."""
+    skip = (page - 1) * size
+
+    memories, total = await MemoryService.get_memories_feed(
+        db,
+        current_user_id=str(current_user.id),
+        category_id=category_id,
+        skip=skip,
+        limit=size,
+    )
+
+    items_with_category = []
+    for memory in memories:
+        from app.schemas.memory import Memory
+        memory_dict = Memory.model_validate(memory).model_dump()
+        memory_dict["category_name"] = memory.category.name if memory.category else None
+        memory_dict["owner_id"] = str(memory.user_id)
+        # Данные автора для отображения в ленте
+        is_own = str(memory.user_id) == str(current_user.id)
+        memory_dict["is_own"] = is_own
+        if memory.user:
+            memory_dict["owner_username"] = memory.user.username
+            memory_dict["owner_first_name"] = memory.user.first_name
+            memory_dict["owner_last_name"] = memory.user.last_name
+            memory_dict["owner_avatar_url"] = memory.user.avatar_url
+        else:
+            memory_dict["owner_username"] = None
+            memory_dict["owner_first_name"] = None
+            memory_dict["owner_last_name"] = None
+            memory_dict["owner_avatar_url"] = None
+        memory_dict["owner_id"] = str(memory.user_id)
+        memory_dict["is_friend"] = not is_own
+        stats = await MemoryService.get_memory_stats(
+            db,
+            memory_id=str(memory.id),
+            user_id=str(current_user.id),
+        )
+        memory_dict.update(stats)
+        items_with_category.append(memory_dict)
+
+    pages = math.ceil(total / size) if total > 0 else 0
+    return {
+        "items": items_with_category,
+        "total": total,
+        "page": page,
+        "size": size,
+        "pages": pages,
+    }
 
 
 @router.get("", response_model=MemoryList)
@@ -143,12 +201,12 @@ async def get_memory(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Get memory details"""
+    """Get memory details (доступ: владелец, друг для friends_only, все для public)."""
     try:
-        memory = await MemoryService.get_memory_by_id(
+        memory = await MemoryService.get_memory_by_id_with_access(
             db,
             memory_id=memory_id,
-            user_id=str(current_user.id),
+            current_user_id=str(current_user.id),
         )
         return memory
     except NotFoundError:

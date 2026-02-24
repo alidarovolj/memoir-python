@@ -17,6 +17,7 @@ def import_models():
     from app.models.story_share import StoryShare  # noqa
     from app.models.task import Task  # noqa
     from app.models.subtask import Subtask  # noqa
+    from app.models.subtask_completion import SubtaskCompletion  # noqa
     from app.models.pet import Pet  # noqa
     from app.models.time_capsule import TimeCapsule  # noqa
     from app.models.daily_prompt import DailyPrompt  # noqa
