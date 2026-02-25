@@ -14,6 +14,7 @@ from app.models.user import User
 from app.models.message import Message
 from app.models.friendship import Friendship, FriendshipStatus
 from app.schemas.message import MessageCreate, MessageOut, MessageListResponse, WebSocketMessage
+from app.services.notification_service import NotificationService
 from pydantic import BaseModel
 
 router = APIRouter()
@@ -172,6 +173,26 @@ async def websocket_endpoint(
                             "type": "message_sent",
                             "message_id": str(message.id)
                         }, user_id)
+                        
+                        # Push notification if receiver is offline
+                        if ws_message.receiver_id not in manager.active_connections:
+                            receiver_result = await db.execute(
+                                select(User).where(User.id == ws_message.receiver_id)
+                            )
+                            receiver = receiver_result.scalar_one_or_none()
+                            if receiver and receiver.fcm_token:
+                                sender_name = (
+                                    f"{sender.first_name} {sender.last_name}".strip()
+                                    if sender and (sender.first_name or sender.last_name)
+                                    else (sender.username if sender else "Someone")
+                                )
+                                await NotificationService.send_message_notification(
+                                    fcm_token=receiver.fcm_token,
+                                    sender_name=sender_name,
+                                    message_preview=message.content,
+                                    sender_id=str(user_id),
+                                )
+                                print(f"✅ [WebSocket] Push notification sent to offline receiver")
                         print(f"✅ [WebSocket] Confirmation sent to sender")
                     except Exception as e:
                         print(f"❌ [WebSocket] Error processing send message: {e}")
@@ -276,6 +297,25 @@ async def send_message(
     message = result.scalar_one()
     
     print(f"✅ [REST API] Message saved: {message.id} from {current_user.id} to {message_data.receiver_id}")
+    
+    # Push notification if receiver is offline
+    if message_data.receiver_id not in manager.active_connections:
+        receiver_result = await db.execute(
+            select(User).where(User.id == message_data.receiver_id)
+        )
+        receiver = receiver_result.scalar_one_or_none()
+        if receiver and receiver.fcm_token:
+            sender_name = (
+                f"{current_user.first_name} {current_user.last_name}".strip()
+                if (current_user.first_name or current_user.last_name)
+                else current_user.username
+            )
+            await NotificationService.send_message_notification(
+                fcm_token=receiver.fcm_token,
+                sender_name=sender_name,
+                message_preview=message_data.content,
+                sender_id=str(current_user.id),
+            )
     
     return MessageOut.from_orm(message)
 

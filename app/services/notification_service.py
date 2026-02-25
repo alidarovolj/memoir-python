@@ -191,6 +191,54 @@ class NotificationService:
             return False
     
     @staticmethod
+    async def send_message_notification(
+        fcm_token: str,
+        sender_name: str,
+        message_preview: str,
+        sender_id: str,
+    ) -> bool:
+        """Send push notification when a new message is received and user is offline"""
+        try:
+            preview = message_preview[:60] + '...' if len(message_preview) > 60 else message_preview
+            message = messaging.Message(
+                notification=messaging.Notification(
+                    title=sender_name,
+                    body=preview,
+                ),
+                data={
+                    'type': 'new_message',
+                    'sender_id': sender_id,
+                    'sender_name': sender_name,
+                    'preview': preview,
+                },
+                token=fcm_token,
+                android=messaging.AndroidConfig(
+                    priority='high',
+                    notification=messaging.AndroidNotification(
+                        icon='notification_icon',
+                        color='#FE5B02',
+                        sound='default',
+                        channel_id='memoir_messages',
+                    ),
+                ),
+                apns=messaging.APNSConfig(
+                    payload=messaging.APNSPayload(
+                        aps=messaging.Aps(
+                            sound='default',
+                            badge=1,
+                        ),
+                    ),
+                    headers={'apns-priority': '10'},
+                ),
+            )
+            response = messaging.send(message)
+            logger.info(f"✅ Message notification sent: {sender_name} → {response}")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Failed to send message notification: {e}")
+            return False
+
+    @staticmethod
     async def test_notification(fcm_token: str) -> bool:
         """
         Send test notification to verify FCM token
