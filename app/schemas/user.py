@@ -7,7 +7,7 @@ from pydantic import BaseModel, EmailStr, Field, ConfigDict
 
 class UserBase(BaseModel):
     """Base user schema"""
-    phone_number: str = Field(..., min_length=10, max_length=20)
+    phone_number: Optional[str] = Field(None, min_length=10, max_length=20)
     username: Optional[str] = Field(None, min_length=3, max_length=100)
     email: Optional[EmailStr] = None
     first_name: Optional[str] = None
