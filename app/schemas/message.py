@@ -39,7 +39,8 @@ class MessageListResponse(BaseModel):
 
 class WebSocketMessage(BaseModel):
     """Schema for WebSocket message"""
-    type: str = Field(..., description="Message type: 'send', 'read', 'typing'")
+    type: str = Field(..., description="Message type: 'send', 'read', 'typing', 'friend_request_send'")
     receiver_id: Optional[UUID] = None
     content: Optional[str] = None
     message_id: Optional[UUID] = None
+    addressee_id: Optional[UUID] = None

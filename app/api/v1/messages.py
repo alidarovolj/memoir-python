@@ -15,6 +15,7 @@ from app.models.message import Message
 from app.models.friendship import Friendship, FriendshipStatus
 from app.schemas.message import MessageCreate, MessageOut, MessageListResponse, WebSocketMessage
 from app.services.notification_service import NotificationService
+from sqlalchemy import or_, and_
 from pydantic import BaseModel
 
 router = APIRouter()
@@ -238,6 +239,186 @@ async def websocket_endpoint(
                         "sender_id": str(user_id),
                         "is_typing": True
                     }, ws_message.receiver_id)
+
+                elif ws_message.type == "friend_request_cancel":
+                    if not ws_message.addressee_id:
+                        await manager.send_personal_message({
+                            "type": "friend_request_error",
+                            "error": "addressee_id is required"
+                        }, user_id)
+                        continue
+
+                    try:
+                        # Find the pending request by requester + addressee
+                        existing_result = await db.execute(
+                            select(Friendship).where(
+                                and_(
+                                    Friendship.requester_id == user_id,
+                                    Friendship.addressee_id == ws_message.addressee_id,
+                                    Friendship.status == FriendshipStatus.PENDING
+                                )
+                            )
+                        )
+                        friendship = existing_result.scalar_one_or_none()
+                        if not friendship:
+                            await manager.send_personal_message({
+                                "type": "friend_request_error",
+                                "error": "Pending friend request not found"
+                            }, user_id)
+                            continue
+
+                        addressee_id = friendship.addressee_id
+                        friendship_id_str = str(friendship.id)
+                        await db.delete(friendship)
+                        await db.commit()
+
+                        # Notify addressee
+                        await manager.send_personal_message({
+                            "type": "friend_request_cancelled",
+                            "friendship_id": friendship_id_str,
+                            "requester_id": str(user_id),
+                        }, addressee_id)
+
+                        # Confirm to sender
+                        await manager.send_personal_message({
+                            "type": "friend_request_cancel_confirmed",
+                            "addressee_id": str(addressee_id),
+                        }, user_id)
+
+                        print(f"✅ [WebSocket] Friend request cancelled: {user_id} → {addressee_id}")
+
+                    except Exception as e:
+                        print(f"❌ [WebSocket] Error processing friend_request_cancel: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        await manager.send_personal_message({
+                            "type": "friend_request_error",
+                            "error": str(e)
+                        }, user_id)
+
+                elif ws_message.type == "friend_request_send":
+                    if not ws_message.addressee_id:
+                        await manager.send_personal_message({
+                            "type": "friend_request_error",
+                            "error": "addressee_id is required"
+                        }, user_id)
+                        continue
+
+                    try:
+                        addressee_id = ws_message.addressee_id
+
+                        # Can't befriend yourself
+                        if addressee_id == user_id:
+                            await manager.send_personal_message({
+                                "type": "friend_request_error",
+                                "error": "Cannot send friend request to yourself"
+                            }, user_id)
+                            continue
+
+                        # Check addressee exists
+                        addressee_result = await db.execute(
+                            select(User).where(User.id == addressee_id)
+                        )
+                        addressee = addressee_result.scalar_one_or_none()
+                        if not addressee:
+                            await manager.send_personal_message({
+                                "type": "friend_request_error",
+                                "error": "User not found"
+                            }, user_id)
+                            continue
+
+                        # Check for existing friendship
+                        existing_result = await db.execute(
+                            select(Friendship).where(
+                                or_(
+                                    and_(
+                                        Friendship.requester_id == user_id,
+                                        Friendship.addressee_id == addressee_id
+                                    ),
+                                    and_(
+                                        Friendship.requester_id == addressee_id,
+                                        Friendship.addressee_id == user_id
+                                    )
+                                )
+                            )
+                        )
+                        existing = existing_result.scalar_one_or_none()
+
+                        if existing:
+                            error_map = {
+                                FriendshipStatus.ACCEPTED: "Already friends",
+                                FriendshipStatus.PENDING: "Friend request already sent",
+                                FriendshipStatus.BLOCKED: "Cannot send friend request to this user",
+                            }
+                            await manager.send_personal_message({
+                                "type": "friend_request_error",
+                                "error": error_map.get(existing.status, "Request already exists")
+                            }, user_id)
+                            continue
+
+                        # Create friendship record
+                        friendship = Friendship(
+                            requester_id=user_id,
+                            addressee_id=addressee_id,
+                            status=FriendshipStatus.PENDING
+                        )
+                        db.add(friendship)
+                        await db.commit()
+                        await db.refresh(friendship)
+
+                        # Load requester info
+                        requester_result = await db.execute(
+                            select(User).where(User.id == user_id)
+                        )
+                        requester = requester_result.scalar_one_or_none()
+
+                        requester_name = (
+                            f"{requester.first_name} {requester.last_name}".strip()
+                            if requester and (requester.first_name or requester.last_name)
+                            else (requester.username if requester else "Someone")
+                        )
+
+                        ws_payload = {
+                            "type": "friend_request",
+                            "friendship_id": str(friendship.id),
+                            "requester": {
+                                "id": str(user_id),
+                                "username": requester.username or "" if requester else "",
+                                "first_name": requester.first_name if requester else None,
+                                "last_name": requester.last_name if requester else None,
+                                "avatar_url": getattr(requester, "avatar_url", None) if requester else None,
+                            },
+                        }
+
+                        # Notify addressee via WS
+                        await manager.send_personal_message(ws_payload, addressee_id)
+
+                        # Confirm to sender
+                        await manager.send_personal_message({
+                            "type": "friend_request_sent",
+                            "friendship_id": str(friendship.id),
+                            "addressee_id": str(addressee_id),
+                        }, user_id)
+
+                        # FCM push if addressee offline
+                        if addressee_id not in manager.active_connections:
+                            if addressee.fcm_token:
+                                await NotificationService.send_friend_request_notification(
+                                    fcm_token=addressee.fcm_token,
+                                    requester_name=requester_name,
+                                    requester_id=str(user_id),
+                                )
+
+                        print(f"✅ [WebSocket] Friend request sent from {user_id} to {addressee_id}")
+
+                    except Exception as e:
+                        print(f"❌ [WebSocket] Error processing friend_request_send: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        await manager.send_personal_message({
+                            "type": "friend_request_error",
+                            "error": str(e)
+                        }, user_id)
         
     except WebSocketDisconnect:
         print(f"🔌 [WebSocket] User {user_id} disconnected")

@@ -239,6 +239,51 @@ class NotificationService:
             return False
 
     @staticmethod
+    async def send_friend_request_notification(
+        fcm_token: str,
+        requester_name: str,
+        requester_id: str,
+    ) -> bool:
+        """Send push notification when a friend request is received"""
+        try:
+            message = messaging.Message(
+                notification=messaging.Notification(
+                    title=requester_name,
+                    body="wants to add you as a friend",
+                ),
+                data={
+                    'type': 'friend_request',
+                    'requester_id': requester_id,
+                    'requester_name': requester_name,
+                },
+                token=fcm_token,
+                android=messaging.AndroidConfig(
+                    priority='high',
+                    notification=messaging.AndroidNotification(
+                        icon='notification_icon',
+                        color='#10B981',
+                        sound='default',
+                        channel_id='memoir_social',
+                    ),
+                ),
+                apns=messaging.APNSConfig(
+                    payload=messaging.APNSPayload(
+                        aps=messaging.Aps(
+                            sound='default',
+                            badge=1,
+                        ),
+                    ),
+                    headers={'apns-priority': '10'},
+                ),
+            )
+            response = messaging.send(message)
+            logger.info(f"✅ Friend request notification sent: {requester_name} → {response}")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Failed to send friend request notification: {e}")
+            return False
+
+    @staticmethod
     async def test_notification(fcm_token: str) -> bool:
         """
         Send test notification to verify FCM token

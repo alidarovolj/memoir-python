@@ -10,6 +10,7 @@ from app.models.user import User
 from app.models.friendship import Friendship, FriendshipStatus
 from app.models.memory import Memory
 from app.models.message import Message
+from app.services.notification_service import NotificationService
 from app.schemas.friendship import (
     FriendRequestCreate,
     FriendRequestResponse,
@@ -318,7 +319,38 @@ async def send_friend_request(
     db.add(friendship)
     await db.commit()
     await db.refresh(friendship)
-    
+
+    # Notify addressee in real-time
+    from app.api.v1.messages import manager
+
+    requester_name = (
+        f"{current_user.first_name} {current_user.last_name}".strip()
+        if (current_user.first_name or current_user.last_name)
+        else (current_user.username or "Someone")
+    )
+
+    ws_payload = {
+        "type": "friend_request",
+        "friendship_id": str(friendship.id),
+        "requester": {
+            "id": str(current_user.id),
+            "username": current_user.username or "",
+            "first_name": current_user.first_name,
+            "last_name": current_user.last_name,
+            "avatar_url": getattr(current_user, "avatar_url", None),
+        },
+    }
+    await manager.send_personal_message(ws_payload, request.addressee_id)
+
+    # FCM push if addressee is offline
+    if request.addressee_id not in manager.active_connections:
+        if addressee.fcm_token:
+            await NotificationService.send_friend_request_notification(
+                fcm_token=addressee.fcm_token,
+                requester_name=requester_name,
+                requester_id=str(current_user.id),
+            )
+
     return FriendshipAction(
         success=True,
         message="Friend request sent successfully",
@@ -330,6 +362,57 @@ async def send_friend_request(
             created_at=friendship.created_at,
             updated_at=friendship.updated_at,
         )
+    )
+
+
+@router.delete("/requests/{request_id}", response_model=FriendshipAction)
+async def cancel_friend_request(
+    request_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Cancel a pending friend request sent by current user
+    """
+    result = await db.execute(
+        select(Friendship).where(Friendship.id == request_id)
+    )
+    friendship = result.scalar_one_or_none()
+
+    if not friendship:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Friend request not found"
+        )
+
+    if friendship.requester_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only cancel your own friend requests"
+        )
+
+    if friendship.status != FriendshipStatus.PENDING:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Friend request is no longer pending"
+        )
+
+    addressee_id = friendship.addressee_id
+    await db.delete(friendship)
+    await db.commit()
+
+    # Notify addressee via WebSocket (in case they're looking at requests)
+    from app.api.v1.messages import manager
+    await manager.send_personal_message({
+        "type": "friend_request_cancelled",
+        "friendship_id": str(request_id),
+        "requester_id": str(current_user.id),
+    }, addressee_id)
+
+    return FriendshipAction(
+        success=True,
+        message="Friend request cancelled",
+        friendship=None
     )
 
 
@@ -381,13 +464,40 @@ async def respond_to_friend_request(
     if response.action == "accept":
         friendship.status = FriendshipStatus.ACCEPTED
         message = "Friend request accepted"
+        ws_event_type = "friend_request_accepted"
     else:  # reject
         friendship.status = FriendshipStatus.REJECTED
         message = "Friend request rejected"
-    
+        ws_event_type = "friend_request_rejected"
+
+    requester_id = friendship.requester_id
     await db.commit()
     await db.refresh(friendship)
-    
+
+    # Notify requester in real-time
+    from app.api.v1.messages import manager
+
+    responder_name = (
+        f"{current_user.first_name} {current_user.last_name}".strip()
+        if (current_user.first_name or current_user.last_name)
+        else (current_user.username or "Someone")
+    )
+
+    await manager.send_personal_message(
+        {
+            "type": ws_event_type,
+            "friendship_id": str(friendship.id),
+            "responder": {
+                "id": str(current_user.id),
+                "username": current_user.username or "",
+                "first_name": current_user.first_name,
+                "last_name": current_user.last_name,
+                "avatar_url": getattr(current_user, "avatar_url", None),
+            },
+        },
+        requester_id,
+    )
+
     return FriendshipAction(
         success=True,
         message=message,
