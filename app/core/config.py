@@ -21,10 +21,10 @@ class Settings(BaseSettings):
     # Redis
     REDIS_URL: str
     
-    # OpenAI
-    OPENAI_API_KEY: str
-    OPENAI_MODEL_CLASSIFICATION: str = "gpt-4o-mini"
-    OPENAI_MODEL_EMBEDDING: str = "text-embedding-3-small"
+    # Gemini
+    GEMINI_API_KEY: str
+    GEMINI_MODEL: str = "gemini-2.5-flash"
+    GEMINI_MODEL_EMBEDDING: str = "models/text-embedding-004"
     
     # External APIs for Smart Search
     TMDB_API_KEY: str = ""  # The Movie Database

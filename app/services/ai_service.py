@@ -1,7 +1,9 @@
-"""AI Service for OpenAI integration"""
+"""AI Service for Google Gemini integration"""
 import json
+import asyncio
 from typing import Dict, List, Optional, Any
-from openai import AsyncOpenAI
+from google import genai
+from google.genai import types
 from app.core.config import settings
 from app.core.exceptions import AIServiceError
 
@@ -22,30 +24,88 @@ class ClassificationResult:
 
 
 class AIService:
-    """AI service for classification and embeddings"""
-    
+    """AI service for classification and embeddings using Gemini"""
+
     def __init__(self):
-        self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-        self.classification_model = settings.OPENAI_MODEL_CLASSIFICATION
-        self.embedding_model = settings.OPENAI_MODEL_EMBEDDING
-    
+        self.client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        self.model_name = settings.GEMINI_MODEL
+        self.embedding_model = settings.GEMINI_MODEL_EMBEDDING
+
+    def _make_config(
+        self,
+        system_instruction: str,
+        temperature: float = 0.3,
+        max_output_tokens: int = 32768,
+    ) -> types.GenerateContentConfig:
+        return types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            temperature=temperature,
+            max_output_tokens=max_output_tokens,
+        )
+
+    @staticmethod
+    def _parse_json(text: str) -> dict:
+        """Parse JSON from model response, robustly extracting and fixing the first valid JSON object."""
+        import re as _re
+        text = text.strip()
+        if "```json" in text:
+            text = text.split("```json")[1].split("```")[0].strip()
+        elif "```" in text:
+            text = text.split("```")[1].split("```")[0].strip()
+        start = text.find("{")
+        if start == -1:
+            start = text.find("[")
+        if start != -1:
+            text = text[start:]
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+        fixed = _re.sub(r",\s*}", "}", text)
+        fixed = _re.sub(r",\s*]", "]", fixed)
+        try:
+            return json.loads(fixed)
+        except json.JSONDecodeError:
+            pass
+        depth = 0
+        in_string = False
+        escape = False
+        end_pos = 0
+        for i, ch in enumerate(text):
+            if escape:
+                escape = False
+                continue
+            if ch == "\\" and in_string:
+                escape = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end_pos = i + 1
+                    break
+        if end_pos > 0:
+            truncated = text[:end_pos]
+            truncated = _re.sub(r",\s*}", "}", truncated)
+            truncated = _re.sub(r",\s*]", "]", truncated)
+            try:
+                return json.loads(truncated)
+            except json.JSONDecodeError:
+                pass
+        return json.loads(text)
+
     async def classify_memory(
         self,
         content: str,
         source_type: str = "text",
         title: Optional[str] = None,
     ) -> ClassificationResult:
-        """
-        Classify memory content into a category
-        
-        Args:
-            content: Memory content to classify
-            source_type: Type of source (text, link, image, voice)
-            title: Optional title
-        
-        Returns:
-            ClassificationResult with category and metadata
-        """
         try:
             system_prompt = """Ты — AI-ассистент для приложения Personal Memory. 
 Твоя задача: классифицировать пользовательский контент в одну из категорий.
@@ -76,114 +136,61 @@ class AIService:
 - recipes: {"dish": "...", "cuisine": "..."}
 - products: {"name": "...", "category": "...", "price": "..."}
 """
-            
             user_prompt = f"Контент: {content}"
             if title:
                 user_prompt = f"Заголовок: {title}\n{user_prompt}"
-            
-            response = await self.client.chat.completions.create(
-                model=self.classification_model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=0.3,
-                max_tokens=500,
+
+            response = await self.client.aio.models.generate_content(
+                model=self.model_name,
+                contents=user_prompt,
+                config=self._make_config(system_prompt, temperature=0.3, max_output_tokens=500),
             )
-            
-            result_text = response.choices[0].message.content.strip()
-            
-            # Parse JSON response
-            try:
-                result_json = json.loads(result_text)
-            except json.JSONDecodeError:
-                # Try to extract JSON from markdown code block
-                if "```json" in result_text:
-                    result_text = result_text.split("```json")[1].split("```")[0]
-                    result_json = json.loads(result_text)
-                else:
-                    raise AIServiceError("Failed to parse classification result")
-            
+            result_json = self._parse_json(response.text)
+
             return ClassificationResult(
                 category=result_json.get("category", "ideas"),
                 confidence=result_json.get("confidence", 0.5),
                 reasoning=result_json.get("reasoning", ""),
                 extracted_data=result_json.get("extracted_data", {}),
             )
-        
+
         except Exception as e:
             raise AIServiceError(f"Classification failed: {str(e)}")
-    
+
     async def generate_embedding(self, text: str) -> List[float]:
-        """
-        Generate embedding vector for text
-        
-        Args:
-            text: Text to embed
-        
-        Returns:
-            List of floats representing the embedding vector
-        """
         try:
-            response = await self.client.embeddings.create(
+            result = await self.client.aio.models.embed_content(
                 model=self.embedding_model,
-                input=text,
+                contents=text,
+                config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT"),
             )
-            
-            return response.data[0].embedding
-        
+            return result.embeddings[0].values
+
         except Exception as e:
             raise AIServiceError(f"Embedding generation failed: {str(e)}")
-    
+
     async def generate_tags(self, content: str, max_tags: int = 5) -> List[str]:
-        """
-        Generate tags for content
-        
-        Args:
-            content: Content to generate tags for
-            max_tags: Maximum number of tags
-        
-        Returns:
-            List of tags
-        """
         try:
             system_prompt = f"""Сгенерируй до {max_tags} релевантных тегов для контента.
 Верни только список тегов через запятую, без нумерации и дополнительного текста.
 Теги должны быть на русском языке, короткими и описательными."""
-            
-            response = await self.client.chat.completions.create(
-                model=self.classification_model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": content},
-                ],
-                temperature=0.5,
-                max_tokens=100,
+
+            response = await self.client.aio.models.generate_content(
+                model=self.model_name,
+                contents=content,
+                config=self._make_config(system_prompt, temperature=0.5, max_output_tokens=100),
             )
-            
-            tags_text = response.choices[0].message.content.strip()
-            tags = [tag.strip() for tag in tags_text.split(",")]
-            
+            tags = [tag.strip() for tag in response.text.strip().split(",")]
             return tags[:max_tags]
-        
+
         except Exception as e:
             raise AIServiceError(f"Tag generation failed: {str(e)}")
-    
+
     async def extract_entities(
         self,
         content: str,
         category: str,
     ) -> Dict[str, Any]:
-        """
-        Extract entities specific to category
-        
-        Args:
-            content: Content to extract from
-            category: Category context
-        
-        Returns:
-            Dictionary of extracted entities
-        """
         try:
             entity_prompts = {
                 "movies": "Извлеки: название фильма, режиссер, актеры, год, жанр",
@@ -193,46 +200,25 @@ class AIService:
                 "recipes": "Извлеки: название блюда, кухня, время готовки, сложность",
                 "products": "Извлеки: название товара, бренд, категория, ориентировочная цена",
             }
-            
             specific_prompt = entity_prompts.get(category, "Извлеки ключевую информацию")
-            
             system_prompt = f"""{specific_prompt}.
 Верни ТОЛЬКО валидный JSON с извлеченными данными.
 Если информация не найдена, используй null."""
-            
-            response = await self.client.chat.completions.create(
-                model=self.classification_model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": content},
-                ],
-                temperature=0.2,
-                max_tokens=300,
+
+            response = await self.client.aio.models.generate_content(
+                model=self.model_name,
+                contents=content,
+                config=self._make_config(system_prompt, temperature=0.2, max_output_tokens=300),
             )
-            
-            result_text = response.choices[0].message.content.strip()
-            
             try:
-                return json.loads(result_text)
-            except json.JSONDecodeError:
-                if "```json" in result_text:
-                    result_text = result_text.split("```json")[1].split("```")[0]
-                    return json.loads(result_text)
+                return self._parse_json(response.text)
+            except Exception:
                 return {}
-        
+
         except Exception as e:
             raise AIServiceError(f"Entity extraction failed: {str(e)}")
-    
+
     async def detect_content_intent(self, user_input: str) -> Dict[str, Any]:
-        """
-        Detect user intent from input text
-        
-        Args:
-            user_input: User's input text
-        
-        Returns:
-            Intent information with search query
-        """
         try:
             system_prompt = """Проанализируй текст и определи его тип и intent.
 
@@ -262,44 +248,28 @@ class AIService:
 - Если "ресторан", "кафе", "место" → place, needs_search=true
 - Если "идея", "мысль", только размышления → idea, needs_search=false
 - Если "надо", "нужно", todo без конкретного объекта → task, needs_search=false
-- Для search_query - извлеки только ключевые слова (убери "посмотрел", "купить", "нужно", etc)
-- Если это просто название (например "Интерстеллар") - попробуй угадать тип по контексту
+- Для search_query - извлеки только ключевые слова
+- Если это просто название — попробуй угадать тип по контексту
 """
-            
-            response = await self.client.chat.completions.create(
-                model=self.classification_model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_input},
-                ],
-                temperature=0.3,
-                max_tokens=200,
+            response = await self.client.aio.models.generate_content(
+                model=self.model_name,
+                contents=user_input,
+                config=self._make_config(system_prompt, temperature=0.3),
             )
-            
-            result_text = response.choices[0].message.content.strip()
-            
             try:
-                result_json = json.loads(result_text)
-            except json.JSONDecodeError:
-                if "```json" in result_text:
-                    result_text = result_text.split("```json")[1].split("```")[0]
-                    result_json = json.loads(result_text)
-                else:
-                    # Fallback
-                    return {
-                        "intent": "idea",
-                        "search_query": user_input,
-                        "needs_search": False,
-                        "confidence": 0.5,
-                        "reasoning": "Failed to parse AI response",
-                    }
-            
-            return result_json
-        
+                return self._parse_json(response.text)
+            except Exception:
+                return {
+                    "intent": "idea",
+                    "search_query": user_input,
+                    "needs_search": False,
+                    "confidence": 0.5,
+                    "reasoning": "Failed to parse AI response",
+                }
+
         except Exception as e:
             raise AIServiceError(f"Intent detection failed: {str(e)}")
 
 
 # Singleton instance
 ai_service = AIService()
-

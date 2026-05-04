@@ -24,8 +24,7 @@ firebase-admin==6.4.0
 google-auth==2.27.0
 
 # AI & ML
-openai==1.10.0
-tiktoken==0.5.2
+google-genai>=0.7.0
 numpy==1.26.3
 
 # Utils

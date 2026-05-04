@@ -1,28 +1,96 @@
-"""AI service for task analysis and suggestions"""
+"""AI service for task analysis and suggestions using Gemini"""
+import json
 from typing import Dict, Any, List
-from openai import AsyncOpenAI
+from google import genai
+from google.genai import types
 from app.core.config import settings
 from app.models.task import TimeScope, TaskPriority
 from app.models.memory import Memory
-import json
+
+
+def _parse_json(text: str) -> dict:
+    """Parse JSON from model response, robustly extracting and fixing the first valid JSON object."""
+    import re as _re
+    text = text.strip()
+    # Strip markdown fences
+    if "```json" in text:
+        text = text.split("```json")[1].split("```")[0].strip()
+    elif "```" in text:
+        text = text.split("```")[1].split("```")[0].strip()
+    # Find first { or [
+    start = text.find("{")
+    if start == -1:
+        start = text.find("[")
+    if start != -1:
+        text = text[start:]
+    # Try direct parse first
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    # Fix trailing commas: ,} and ,]
+    fixed = _re.sub(r",\s*}", "}", text)
+    fixed = _re.sub(r",\s*]", "]", fixed)
+    try:
+        return json.loads(fixed)
+    except json.JSONDecodeError:
+        pass
+    # Try to extract balanced JSON by counting braces
+    depth = 0
+    in_string = False
+    escape = False
+    end_pos = 0
+    for i, ch in enumerate(text):
+        if escape:
+            escape = False
+            continue
+        if ch == "\\" and in_string:
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end_pos = i + 1
+                break
+    if end_pos > 0:
+        truncated = text[:end_pos]
+        truncated = _re.sub(r",\s*}", "}", truncated)
+        truncated = _re.sub(r",\s*]", "]", truncated)
+        try:
+            return json.loads(truncated)
+        except json.JSONDecodeError:
+            pass
+    # Final fallback: raise original error
+    return json.loads(text)
 
 
 class TaskAIService:
-    """Service for AI-powered task analysis"""
+    """Service for AI-powered task analysis using Gemini"""
 
     def __init__(self):
-        self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        self.client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        self.model_name = settings.GEMINI_MODEL
+
+    def _make_config(
+        self,
+        system_instruction: str,
+        temperature: float = 0.3,
+        max_output_tokens: int = 32768,
+    ) -> types.GenerateContentConfig:
+        return types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            temperature=temperature,
+            max_output_tokens=max_output_tokens,
+        )
 
     async def analyze_task(self, title: str) -> Dict[str, Any]:
-        """
-        Analyze task title and suggest time_scope, priority, and category
-        
-        Args:
-            title: Task title/description
-            
-        Returns:
-            Dict with suggested time_scope, priority, confidence, and reasoning
-        """
         system_prompt = """Ты — AI-ассистент для приложения планирования задач.
 Твоя задача: проанализировать название задачи и определить:
 
@@ -49,50 +117,17 @@ class TaskAIService:
    - Для monthly задач: "this_month" (в течение 30 дней)
    - Для urgent задач: "today"
    - null - если нет конкретного срока
-   
-   Примеры:
-   - "Купить молоко" → "today"
-   - "Посмотреть фильм" → "this_week"
-   - "Оплатить интернет" → конкретная дата если известно, иначе "this_month"
-   - "Почистить зубы" → null (регулярная задача)
 
 5. **needs_deadline** (требуется ли строгий дедлайн):
    - true - если задача имеет конкретный срок (оплата счетов, встречи, дедлайны)
-   - false - для регулярных задач без строгого срока (чистка зубов, зарядка)
+   - false - для регулярных задач без строгого срока
 
 6. **is_recurring** (повторяющаяся ли задача):
-   - true - если задача должна повторяться регулярно (чистка зубов, зарядка, душ, еда, сон)
+   - true - если задача должна повторяться регулярно (чистка зубов, зарядка, душ)
    - false - если задача одноразовая (купить что-то, посмотреть фильм, встреча)
-   
-   Примеры recurring задач:
-   - "Почистить зубы" → true (ежедневно)
-   - "Сходить в душ" → true (ежедневно)
-   - "Утренняя зарядка" → true (ежедневно)
-   - "Позавтракать" → true (ежедневно)
-   - "Выпить воду" → true (ежедневно)
-   
-   Примеры НЕ recurring задач:
-   - "Посмотреть Начало" → false (одноразово)
-   - "Купить молоко" → false (одноразово)
-   - "Позвонить маме" → false (конкретный раз)
 
 7. **category** (категория, если применимо):
-   - "movies" - фильмы, сериалы
-   - "books" - книги, чтение
-   - "places" - места для посещения
-   - "recipes" - готовка, рецепты
-   - "ideas" - идеи, мысли
-   - "products" - покупки
-   - null - если не подходит ни одна категория
-
-Примеры:
-- "Почистить зубы" → daily, medium, "08:00", null, false, true, null
-- "Сходить в душ" → daily, medium, "08:00", null, false, true, null
-- "Посмотреть Начало" → weekly, medium, null, "this_week", false, false, movies
-- "Купить молоко" → daily, high, "18:00", "today", false, false, products
-- "Оплатить интернет" → monthly, high, "10:00", "this_month", true, false, null
-- "Позвонить маме" → daily, high, "19:00", "today", false, false, null
-- "Убраться в квартире" → weekly, medium, null, "this_week", false, false, null
+   - "movies", "books", "places", "recipes", "ideas", "products", null
 
 Верни ТОЛЬКО валидный JSON без дополнительного текста:
 {
@@ -102,27 +137,19 @@ class TaskAIService:
   "suggested_due_date": "today",
   "needs_deadline": false,
   "is_recurring": true,
-  "category": "movies",
+  "category": null,
   "confidence": 0.95,
   "reasoning": "Краткое объяснение"
 }"""
 
         try:
-            response = await self.client.chat.completions.create(
-                model=settings.OPENAI_MODEL_CLASSIFICATION,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Проанализируй задачу: {title}"}
-                ],
-                temperature=0.3,
-                max_tokens=200,
+            response = await self.client.aio.models.generate_content(
+                model=self.model_name,
+                contents=f"Проанализируй задачу: {title}",
+                config=self._make_config(system_prompt, temperature=0.3),
             )
+            result = _parse_json(response.text)
 
-            content = response.choices[0].message.content.strip()
-            
-            # Parse JSON response
-            result = json.loads(content)
-            
             return {
                 "time_scope": result.get("time_scope", "daily"),
                 "priority": result.get("priority", "medium"),
@@ -132,12 +159,11 @@ class TaskAIService:
                 "is_recurring": result.get("is_recurring", False),
                 "category": result.get("category"),
                 "confidence": result.get("confidence", 0.8),
-                "reasoning": result.get("reasoning", "AI-анализ задачи")
+                "reasoning": result.get("reasoning", "AI-анализ задачи"),
             }
 
         except Exception as e:
             print(f"❌ [TASK_AI] Error analyzing task: {e}")
-            # Fallback to defaults
             return {
                 "time_scope": "daily",
                 "priority": "medium",
@@ -147,70 +173,20 @@ class TaskAIService:
                 "is_recurring": False,
                 "category": None,
                 "confidence": 0.5,
-                "reasoning": "Не удалось проанализировать (используются значения по умолчанию)"
+                "reasoning": "Не удалось проанализировать (используются значения по умолчанию)",
             }
 
     async def suggest_tasks_from_memory(
         self,
         memory: Memory,
-        limit: int = 3
+        limit: int = 3,
     ) -> List[Dict[str, Any]]:
-        """
-        AI предлагает задачи на основе воспоминания
-        
-        Args:
-            memory: Воспоминание для анализа
-            limit: Максимальное количество предложений
-            
-        Returns:
-            Список предложенных задач с confidence scores
-        """
-        # Получаем категорию если есть
         category_name = memory.category.name if memory.category else "other"
-        
+
         system_prompt = """Ты — AI-ассистент для приложения Personal Memory & Planning.
 Пользователь сохранил воспоминание. Твоя задача: предложить 2-3 релевантные задачи на будущее.
 
-**Правила предложений по категориям:**
-
-📽️ **movies** (фильмы/сериалы):
-- Похожие фильмы того же жанра
-- Фильмы того же режиссера
-- Продолжения/приквелы
-- Похожие по настроению
-
-📚 **books** (книги):
-- Другие книги автора
-- Похожие книги по жанру/теме
-- Книги из той же серии
-- Похожие по стилю
-
-📍 **places** (места):
-- Похожие места/рестораны
-- Места поблизости
-- Места с похожей кухней/атмосферой
-- Достопримечательности в том же городе
-
-💡 **ideas** (идеи):
-- Конкретные шаги для реализации
-- Связанные идеи для изучения
-- Практические действия
-- Следующие этапы развития идеи
-
-🍳 **recipes** (рецепты):
-- Похожие блюда
-- Варианты рецепта
-- Блюда из тех же ингредиентов
-- Комплементарные блюда
-
-🛍️ **products** (товары):
-- Дополнительные аксессуары
-- Похожие товары
-- Сопутствующие товары
-- Альтернативы
-
-**Формат ответа:**
-Верни ТОЛЬКО валидный JSON без дополнительного текста:
+Формат ответа — ТОЛЬКО валидный JSON без дополнительного текста:
 {
   "suggestions": [
     {
@@ -224,29 +200,13 @@ class TaskAIService:
   ]
 }
 
-**Требования:**
+Требования:
 - Предложи ровно 2-3 задачи (не больше, не меньше)
 - Задачи должны быть конкретными и действенными
-- Используй формулировку "Посмотреть X", "Прочитать X", "Посетить X"
-- confidence должен быть от 0.7 до 1.0 (предлагай только уверенные варианты)
+- confidence от 0.7 до 1.0
 - time_scope: daily/weekly/monthly/long_term
 - priority: low/medium/high/urgent
-- reasoning: короткое объяснение (1 предложение)
-
-Примеры:
-
-1. Воспоминание: "Посмотрел Начало" (movies)
-→ Предложи: "Посмотреть Интерстеллар", "Посмотреть Престиж", "Посмотреть Помни"
-
-2. Воспоминание: "Прочитал 1984" (books)
-→ Предложи: "Прочитать Скотный двор", "Прочитать О дивный новый мир", "Прочитать 451 градус по Фаренгейту"
-
-3. Воспоминание: "Посетил ресторан итальянской кухни X" (places)
-→ Предложи: "Посетить ресторан Y", "Попробовать ресторан Z", "Сходить в траттория A"
-
-4. Воспоминание: "Идея: создать приложение для X" (ideas)
-→ Предложи: "Изучить технологии для X", "Набросать прототип", "Исследовать конкурентов"
-"""
+- reasoning: короткое объяснение (1 предложение)"""
 
         user_prompt = f"""Воспоминание:
 Категория: {category_name}
@@ -257,30 +217,20 @@ class TaskAIService:
 
         try:
             print(f"🤖 [TASK_AI] Generating suggestions for memory: {memory.title}")
-            
-            response = await self.client.chat.completions.create(
-                model=settings.OPENAI_MODEL_CLASSIFICATION,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                temperature=0.7,  # Немного креативности
-                max_tokens=800,
+            response = await self.client.aio.models.generate_content(
+                model=self.model_name,
+                contents=user_prompt,
+                config=self._make_config(system_prompt, temperature=0.7, max_output_tokens=800),
             )
+            print(f"🤖 [TASK_AI] Raw response: {response.text[:200]}...")
 
-            content = response.choices[0].message.content.strip()
-            print(f"🤖 [TASK_AI] Raw response: {content[:200]}...")
-            
-            # Parse JSON response
-            result = json.loads(content)
+            result = _parse_json(response.text)
             suggestions = result.get("suggestions", [])
-            
             print(f"✅ [TASK_AI] Generated {len(suggestions)} suggestions")
-            
-            # Validate and filter suggestions
+
             valid_suggestions = []
             for suggestion in suggestions[:limit]:
-                if all(key in suggestion for key in ["title", "description", "time_scope", "priority"]):
+                if all(k in suggestion for k in ["title", "description", "time_scope", "priority"]):
                     valid_suggestions.append({
                         "title": suggestion["title"],
                         "description": suggestion["description"],
@@ -288,285 +238,92 @@ class TaskAIService:
                         "priority": suggestion["priority"],
                         "confidence": suggestion.get("confidence", 0.8),
                         "reasoning": suggestion.get("reasoning", "AI рекомендация"),
-                        "category": category_name if category_name != "other" else None
+                        "category": category_name if category_name != "other" else None,
                     })
-            
+
             return valid_suggestions
 
         except Exception as e:
             print(f"❌ [TASK_AI] Error generating suggestions: {e}")
-            # Return empty list on error
             return []
 
-    async def analyze_habit(self, title: str, subtasks_count: int | None = None) -> Dict[str, Any]:
-        """
-        Analyze habit/goal and generate suggested subtasks
-        
-        Args:
-            title: Habit/goal title (e.g., "Бросить курить", "Начать бегать")
-            subtasks_count: Количество подзадач (None = AI определяет оптимальное количество)
-            
-        Returns:
-            Dict with group_name, group_icon, subtasks list, confidence, reasoning
-        """
-        # Определяем количество задач
+    async def analyze_habit(
+        self,
+        title: str,
+        subtasks_count: int | None = None,
+    ) -> Dict[str, Any]:
         if subtasks_count is None:
-            count_instruction = """ВАЖНО: Ты сам определяешь оптимальное количество задач на основе глубокого анализа привычки!
-- Анализируй сложность, специфику и потребности конкретной привычки
-- Создавай столько задач, сколько действительно необходимо для достижения цели
-- НЕ ограничивай себя какими-либо лимитами - если нужно 2 задачи, создай 2, если нужно 8 - создай 8
-- Каждая задача должна быть значимой и полезной - лучше меньше, но качественных задач, чем много лишних
-- Думай о реальной эффективности, а не о количестве"""
+            count_instruction = (
+                "ВАЖНО: Ты сам определяешь оптимальное количество задач на основе глубокого анализа привычки! "
+                "Не ограничивай себя — если нужно 2 задачи, создай 2, если нужно 8 — создай 8."
+            )
         else:
             count_instruction = f"Создай ровно {subtasks_count} конкретных подзадач"
-        
+
         system_prompt = f"""Ты — AI-ассистент для приложения планирования привычек и целей.
-Твоя задача: проанализировать глобальную цель/привычку и создать группу ежедневных подзадач для её достижения.
+Твоя задача: проанализировать глобальную цель/привычку и создать группу ежедневных подзадач.
 
-**Правила генерации подзадач:**
+Количество: {count_instruction}
 
-1. **Количество**: {count_instruction}
-2. **Частота**: Большинство должны быть ежедневными (is_recurring: true)
-3. **Разнообразие**: Физические + ментальные + практические действия
-4. **Время**: Распредели по времени суток (утро, день, вечер)
-5. **Приоритеты**: Варьируй от low до high
-6. **Цвета**: Используй hex-цвета для визуального разделения
-7. **Иконки**: Используй Ionicons (формат: "Ionicons.icon_name_outline")
-8. **Сабтаски**: Для каждой задачи создай 2-4 конкретных шага (subtasks) - это вложенные действия, которые нужно выполнить для завершения задачи. Сабтаски должны быть простыми и конкретными.
+Правила:
+- Большинство подзадач должны быть ежедневными (is_recurring: true)
+- Разнообразие: физические + ментальные + практические действия
+- Время: распредели по времени суток (утро, день, вечер)
+- Цвета в hex-формате: #EF4444 (красный), #F97316 (оранжевый), #FBBF24 (желтый), #10B981 (зеленый), #3B82F6 (синий), #8B5CF6 (фиолетовый)
+- Иконки в формате "Ionicons.icon_name_outline"
+- Для каждой задачи создай 2-4 конкретных шага (subtasks)
 
-**Примеры привычек и подзадач:**
-
-🚭 "Бросить курить":
-- "Выпить стакан воды" (утро, 08:00, blue, water, medium)
-  Сабтаски: ["Наполнить стакан водой", "Выпить медленно", "Сделать глубокий вдох"]
-- "Использовать пластырь" (утро, 09:00, green, medical, high)
-  Сабтаски: ["Снять старый пластырь", "Очистить кожу", "Наклеить новый пластырь"]
-- "Дыхательные упражнения" (день, 14:00, purple, leaf, medium)
-  Сабтаски: ["Сесть удобно", "Вдох на 4 счета", "Выдох на 6 счетов", "Повторить 5 раз"]
-- "Прогулка на свежем воздухе" (вечер, 18:00, orange, walk, medium)
-  Сабтаски: ["Одеться по погоде", "Выйти на улицу", "Идти 20 минут", "Вернуться домой"]
-- "Занять руки делом" (по необходимости, любое время, yellow, hand, low)
-  Сабтаски: ["Выбрать активность", "Выполнить 10-15 минут", "Отметить выполнение"]
-
-🏃 "Начать бегать":
-- "Утренняя растяжка" (утро, 07:00, purple, body, medium)
-  Сабтаски: ["Растянуть ноги 5 мин", "Растянуть спину 3 мин", "Разминка суставов 2 мин"]
-- "Пробежка 2-3 км" (утро, 07:30, red, fitness, high)
-  Сабтаски: ["Разминка 5 минут", "Бег в комфортном темпе", "Заминка 5 минут", "Растяжка"]
-- "Выпить воды после пробежки" (утро, 08:30, blue, water, high)
-  Сабтаски: ["Взять бутылку воды", "Выпить 300-500 мл", "Подождать 10 минут перед едой"]
-- "Легкий перекус" (утро, 09:00, green, restaurant, medium)
-  Сабтаски: ["Приготовить белковый перекус", "Съесть в течение 30 мин после пробежки"]
-
-⚖️ "Похудеть / Здоровое питание":
-- "Здоровый завтрак" (утро, 08:00, green, restaurant, high)
-- "Выпить 2л воды" (весь день, null, blue, water, medium)
-- "Тренировка 30 мин" (вечер, 18:00, red, fitness, high)
-- "Отказаться от сладкого" (весь день, null, orange, close_circle, medium)
-- "Вечерняя прогулка" (вечер, 20:00, purple, walk, low)
-
-📚 "Выучить английский":
-- "Duolingo 15 минут" (утро, 09:00, green, language, high)
-- "Прочитать текст" (день, 14:00, blue, book, medium)
-- "Посмотреть видео на английском" (вечер, 19:00, red, play, medium)
-- "Выписать новые слова" (вечер, 20:00, purple, create, low)
-
-**Доступные цвета (hex):**
-- Красный: #EF4444 (срочно, важно)
-- Оранжевый: #F97316 (важно)
-- Желтый: #FBBF24 (внимание)
-- Зеленый: #10B981 (здоровье, рост)
-- Синий: #3B82F6 (вода, спокойствие)
-- Фиолетовый: #8B5CF6 (духовное, медитация)
-- Розовый: #EC4899 (забота о себе)
-
-**Популярные иконки Ionicons:**
-- water_outline (вода)
-- fitness_outline (спорт)
-- restaurant_outline (еда)
-- book_outline (чтение)
-- walk_outline (прогулка)
-- leaf_outline (медитация, дыхание)
-- heart_outline (здоровье)
-- sparkles_outline (привычки)
-- time_outline (время)
-- checkmark_circle_outline (выполнение)
-- close_circle_outline (отказ от чего-то)
-- add_circle_outline (добавление)
-- create_outline (творчество)
-- language_outline (языки)
-- play_outline (видео)
-- musical_notes_outline (музыка)
-- body_outline (тело, растяжка)
-- medical_outline (лекарства, здоровье)
-- bed_outline (сон)
-- sunny_outline (утро)
-- moon_outline (вечер)
-
-**Группа:**
-- group_name: Название группы (обычно = название привычки)
-- group_icon: Emoji для группы (🚭, 🏃, ⚖️, 📚, 💪, 🧘, 🎯, etc.)
-
-Верни ТОЛЬКО валидный JSON без дополнительного текста.
-
-Пример для сложной привычки "Бросить курить":
+Верни ТОЛЬКО валидный JSON:
 {{
-  "group_name": "Бросить курить",
-  "group_icon": "🚭",
+  "group_name": "Название группы",
+  "group_icon": "🎯",
   "subtasks": [
     {{
-      "title": "Выпить стакан воды",
-      "description": "Помогает снизить тягу к курению",
+      "title": "Название задачи",
+      "description": "Зачем нужна эта задача",
       "priority": "medium",
       "suggested_time": "08:00",
       "color": "#3B82F6",
       "icon": "Ionicons.water_outline",
       "is_recurring": true,
-      "subtasks": ["Наполнить стакан водой", "Выпить медленно", "Сделать глубокий вдох"]
-    }},
-    {{
-      "title": "Использовать пластырь",
-      "description": "Никотиновый пластырь на день",
-      "priority": "high",
-      "suggested_time": "09:00",
-      "color": "#10B981",
-      "icon": "Ionicons.medical_outline",
-      "is_recurring": true,
-      "subtasks": ["Снять старый пластырь", "Очистить кожу", "Наклеить новый пластырь"]
-    }},
-    {{
-      "title": "Дыхательные упражнения",
-      "description": "Помогают справиться с тягой",
-      "priority": "medium",
-      "suggested_time": "14:00",
-      "color": "#8B5CF6",
-      "icon": "Ionicons.leaf_outline",
-      "is_recurring": true,
-      "subtasks": ["Сесть удобно", "Вдох на 4 счета", "Выдох на 6 счетов", "Повторить 5 раз"]
-    }},
-    {{
-      "title": "Прогулка на свежем воздухе",
-      "description": "Отвлекает и улучшает настроение",
-      "priority": "medium",
-      "suggested_time": "18:00",
-      "color": "#F97316",
-      "icon": "Ionicons.walk_outline",
-      "is_recurring": true,
-      "subtasks": ["Одеться по погоде", "Выйти на улицу", "Идти 20 минут"]
-    }},
-    {{
-      "title": "Занять руки делом",
-      "description": "Когда возникает желание закурить",
-      "priority": "low",
-      "suggested_time": null,
-      "color": "#FBBF24",
-      "icon": "Ionicons.hand_left_outline",
-      "is_recurring": true,
-      "subtasks": ["Выбрать активность", "Выполнить 10-15 минут", "Отметить выполнение"]
+      "subtasks": ["Шаг 1", "Шаг 2", "Шаг 3"]
     }}
   ],
   "confidence": 0.95,
-  "reasoning": "Комплексный подход: физиологические и психологические методы"
-}}
-
-Пример для простой привычки "Пить воду":
-{{
-  "group_name": "Пить достаточно воды",
-  "group_icon": "💧",
-  "subtasks": [
-    {{
-      "title": "Стакан воды утром",
-      "description": "Запускает метаболизм",
-      "priority": "high",
-      "suggested_time": "07:00",
-      "color": "#3B82F6",
-      "icon": "Ionicons.water_outline",
-      "is_recurring": true,
-      "subtasks": ["Наполнить стакан", "Выпить залпом"]
-    }},
-    {{
-      "title": "Вода перед едой",
-      "description": "Помогает контролировать аппетит",
-      "priority": "medium",
-      "suggested_time": null,
-      "color": "#3B82F6",
-      "icon": "Ionicons.water_outline",
-      "is_recurring": true,
-      "subtasks": ["Выпить стакан за 30 мин до еды"]
-    }},
-    {{
-      "title": "Вода перед сном",
-      "description": "Поддержание водного баланса",
-      "priority": "low",
-      "suggested_time": "21:00",
-      "color": "#3B82F6",
-      "icon": "Ionicons.water_outline",
-      "is_recurring": true,
-      "subtasks": ["Выпить стакан воды"]
-    }}
-  ],
-  "confidence": 0.9,
-  "reasoning": "Простая привычка требует меньше задач"
-}}
-
-**Важно:**
-- Все подзадачи должны быть конкретными и действенными
-- Описания должны объяснять, зачем нужна подзадача
-- is_recurring почти всегда true для привычек
-- suggested_time в формате HH:MM или null
-- Цвета должны быть в hex-формате с # (например, #3B82F6)
-- Иконки в формате "Ionicons.icon_name_outline"
-- **Сабтаски (subtasks)**: Массив строк с конкретными шагами для выполнения задачи (2-4 шага). Каждый шаг должен быть простым и выполнимым за 1-5 минут.
-"""
+  "reasoning": "Краткое объяснение"
+}}"""
 
         if subtasks_count is None:
-            user_prompt = f"""Проанализируй привычку/цель и создай группу подзадач: "{title}"
-
-ВАЖНО: 
-- Глубоко проанализируй эту привычку и определи оптимальное количество задач
-- Не ограничивай себя никакими лимитами - создавай столько задач, сколько реально нужно
-- Каждая задача должна быть значимой и вносить вклад в достижение цели
-- Если привычка простая - создай меньше задач, если сложная - больше
-- Думай о качестве и эффективности, а не о количестве"""
+            user_prompt = f"Habit/goal: {title}"
         else:
-            user_prompt = f"Проанализируй привычку/цель и создай группу подзадач: {title}"
+            user_prompt = f"Habit/goal: {title}. Subtasks count: {subtasks_count}"
 
         try:
             print(f"🤖 [TASK_AI] Analyzing habit: {title}")
-            
-            response = await self.client.chat.completions.create(
-                model=settings.OPENAI_MODEL_CLASSIFICATION,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                temperature=0.8,  # Больше креативности для разнообразия количества задач
-                max_tokens=2000,  # Увеличено для поддержки большего количества задач
+            response = await self.client.aio.models.generate_content(
+                model=self.model_name,
+                contents=user_prompt,
+                config=self._make_config(system_prompt, temperature=0.8, max_output_tokens=32768),
             )
+            print(f"🤖 [TASK_AI] Raw response: {response.text[:200]}...")
 
-            content = response.choices[0].message.content.strip()
-            print(f"🤖 [TASK_AI] Raw response: {content[:200]}...")
-            
-            # Parse JSON response
-            result = json.loads(content)
-            
+            result = _parse_json(response.text)
             print(f"✅ [TASK_AI] Generated {len(result.get('subtasks', []))} subtasks")
-            
+
             return {
                 "group_name": result.get("group_name", title),
                 "group_icon": result.get("group_icon", "🎯"),
                 "subtasks": result.get("subtasks", []),
                 "confidence": result.get("confidence", 0.8),
-                "reasoning": result.get("reasoning", "AI-анализ привычки")
+                "reasoning": result.get("reasoning", "AI-анализ привычки"),
             }
 
         except Exception as e:
             print(f"❌ [TASK_AI] Error analyzing habit: {e}")
-            # Return minimal response
             return {
                 "group_name": title,
                 "group_icon": "🎯",
                 "subtasks": [],
                 "confidence": 0.5,
-                "reasoning": "Не удалось проанализировать (используйте ручное создание)"
+                "reasoning": "Не удалось проанализировать (используйте ручное создание)",
             }
