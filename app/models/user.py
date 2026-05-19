@@ -43,6 +43,9 @@ class User(Base):
     education = Column(String(200), nullable=True)
     hobbies = Column(String(500), nullable=True)
     
+    # Rank / XP system
+    xp = Column(Integer, default=0, nullable=False)
+
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

@@ -38,6 +38,15 @@ async def create_story(
             story_data=story_data,
         )
         logger.info(f"Story {story.id} created by user {current_user.id}")
+
+        # Award XP for creating a story
+        try:
+            from app.services.xp_service import award_xp, XP_STORY
+            await award_xp(db, current_user.id, XP_STORY, reason="story_created")
+            await db.commit()
+        except Exception:
+            pass
+
         return story
     except NotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))

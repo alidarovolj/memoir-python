@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 import shutil
 from pathlib import Path
@@ -16,6 +16,7 @@ from app.models.task import Task
 from app.models.story import Story
 from app.api.deps import get_current_user
 from app.services.notification_service import NotificationService
+from app.services.xp_service import get_rank_info
 
 router = APIRouter()
 
@@ -33,9 +34,28 @@ class UserProfileResponse(BaseModel):
     firebase_uid: Optional[str]
     created_at: str
     updated_at: str
-    
+    xp: int = 0
+    rank: str = "newbie"
+    rank_label: str = "Newbie"
+    rank_emoji: str = "🌱"
+    xp_for_next: Optional[int] = None
+    rank_progress: float = 0.0
+
     class Config:
         from_attributes = True
+
+
+class LeaderboardEntry(BaseModel):
+    rank_pos: int
+    user_id: str
+    username: Optional[str]
+    first_name: Optional[str]
+    last_name: Optional[str]
+    avatar_url: Optional[str]
+    xp: int
+    rank: str
+    rank_label: str
+    rank_emoji: str
 
 
 class UserProfileUpdate(BaseModel):
@@ -78,6 +98,7 @@ async def get_current_user_profile(
     current_user: User = Depends(get_current_user),
 ):
     """Get current user's profile information"""
+    rank_info = get_rank_info(current_user.xp or 0)
     return UserProfileResponse(
         id=str(current_user.id),
         phone_number=current_user.phone_number,
@@ -89,7 +110,42 @@ async def get_current_user_profile(
         firebase_uid=current_user.firebase_uid,
         created_at=current_user.created_at.isoformat(),
         updated_at=current_user.updated_at.isoformat(),
+        xp=rank_info["xp"],
+        rank=rank_info["rank"],
+        rank_label=rank_info["rank_label"],
+        rank_emoji=rank_info["rank_emoji"],
+        xp_for_next=rank_info["xp_for_next"],
+        rank_progress=rank_info["progress"],
     )
+
+
+@router.get("/leaderboard", response_model=List[LeaderboardEntry])
+async def get_leaderboard(
+    limit: int = 50,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Global XP leaderboard — top users by XP."""
+    result = await db.execute(
+        select(User).order_by(User.xp.desc()).limit(limit)
+    )
+    users = result.scalars().all()
+    entries = []
+    for pos, u in enumerate(users, start=1):
+        ri = get_rank_info(u.xp or 0)
+        entries.append(LeaderboardEntry(
+            rank_pos=pos,
+            user_id=str(u.id),
+            username=u.username,
+            first_name=u.first_name,
+            last_name=u.last_name,
+            avatar_url=u.avatar_url,
+            xp=ri["xp"],
+            rank=ri["rank"],
+            rank_label=ri["rank_label"],
+            rank_emoji=ri["rank_emoji"],
+        ))
+    return entries
 
 
 @router.put("/me")

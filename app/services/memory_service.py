@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, or_
 from sqlalchemy.orm import selectinload
 from uuid import UUID
-from app.models.memory import Memory, PrivacyLevel
+from app.models.memory import Memory, PrivacyLevel, SourceType
 from app.models.category import Category
 from app.models.memory_reactions import MemoryReaction, MemoryComment
 from app.models.memory_share import memory_shares
@@ -160,15 +160,19 @@ class MemoryService:
         limit: int = 20,
     ) -> tuple[List[Memory], int]:
         """Get paginated list of memories"""
-        # Build base query
-        query = select(Memory).where(Memory.user_id == user_id)
+        # Build base query — exclude story-only memories from the regular feed
+        base_cond = and_(
+            Memory.user_id == user_id,
+            Memory.source_type != SourceType.story,
+        )
+        query = select(Memory).where(base_cond)
         
         # Filter by category if provided
         if category_id:
             query = query.where(Memory.category_id == category_id)
         
         # Get total count
-        count_query = select(func.count()).select_from(Memory).where(Memory.user_id == user_id)
+        count_query = select(func.count()).select_from(Memory).where(base_cond)
         if category_id:
             count_query = count_query.where(Memory.category_id == category_id)
         
@@ -239,7 +243,7 @@ class MemoryService:
                     ),
                 )
             )
-        feed_cond = or_(*feed_conditions)
+        feed_cond = and_(or_(*feed_conditions), Memory.source_type != SourceType.story)
         if category_id:
             feed_cond = and_(feed_cond, Memory.category_id == category_id)
 

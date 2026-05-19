@@ -14,6 +14,7 @@ class SourceType(str, enum.Enum):
     link = "link"
     image = "image"
     voice = "voice"
+    story = "story"
 
 
 class PrivacyLevel(str, enum.Enum):

@@ -149,13 +149,24 @@ class ChallengeService:
         challenge = await ChallengeService.get_challenge_by_id(db, challenge_id)
         target = challenge.goal.get("target", 0)
         
+        just_completed = False
         if participant.progress >= target and not participant.completed:
             participant.completed = True
             participant.completed_at = datetime.now(timezone.utc)
-        
+            just_completed = True
+
         await db.commit()
         await db.refresh(participant)
-        
+
+        # Award XP for completing the challenge
+        if just_completed:
+            try:
+                from app.services.xp_service import award_xp, XP_CHALLENGE
+                await award_xp(db, participant.user_id, XP_CHALLENGE, reason="challenge_completed")
+                await db.commit()
+            except Exception:
+                pass
+
         return participant
     
     @staticmethod

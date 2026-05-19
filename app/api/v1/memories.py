@@ -145,6 +145,14 @@ async def create_memory(
         print(f"🖼️ [API] Memory image_url: {memory.image_url}")
         print(f"🖼️ [API] Memory backdrop_url: {memory.backdrop_url}")
         
+        # Award XP to user
+        try:
+            from app.services.xp_service import award_xp, XP_MEMORY
+            await award_xp(db, current_user.id, XP_MEMORY, reason="memory_created")
+            await db.commit()
+        except Exception:
+            pass
+
         # Trigger background AI processing
         print(f"🤖 [API] Triggering AI processing...")
         from app.tasks.ai_tasks import process_memory_full

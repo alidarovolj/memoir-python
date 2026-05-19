@@ -3,7 +3,7 @@ from typing import Optional, List
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func, and_
 from sqlalchemy.orm import selectinload
 from pydantic import BaseModel
 
@@ -229,24 +229,121 @@ async def update_task(
     }
 
 
-@router.post("/{task_id}/complete", response_model=Task)
+@router.post("/{task_id}/complete")
 async def complete_task(
     task_id: UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Mark task as completed
-    
-    Sets status to 'completed' and records completion timestamp
+    Mark task as completed, award XP to pet + user, and update achievement progress.
+
+    Returns task data + xp_earned + achievements_unlocked.
     """
+    from datetime import timezone
+    from app.models.achievement import Achievement, UserAchievement, AchievementType
+    from app.models.pet import Pet
+    from app.services.xp_service import (
+        award_xp,
+        XP_TASK_LOW, XP_TASK_MEDIUM, XP_TASK_HIGH, XP_TASK_CRITICAL,
+    )
+
     task = await TaskService.complete_task(db, task_id, current_user.id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    # XP amount depends on task priority
+    _priority_xp = {
+        "low":      XP_TASK_LOW,
+        "medium":   XP_TASK_MEDIUM,
+        "high":     XP_TASK_HIGH,
+        "critical": XP_TASK_CRITICAL,
+    }
+    xp_earned = _priority_xp.get(str(task.priority.value if task.priority else "medium"), XP_TASK_MEDIUM)
+    achievements_unlocked: list[dict] = []
+
+    try:
+        # Award XP to user
+        await award_xp(db, current_user.id, xp_earned, reason="task_completed")
+
+        # Award XP to pet
+        pet_result = await db.execute(
+            select(Pet).where(Pet.user_id == current_user.id)
+        )
+        pet = pet_result.scalar_one_or_none()
+        if pet:
+            pet.xp += xp_earned
+            pet.check_level_up()
+
+        # Count total completed tasks for this user
+        count_result = await db.execute(
+            select(func.count()).select_from(TaskModel).where(
+                and_(
+                    TaskModel.user_id == current_user.id,
+                    TaskModel.status == TaskStatus.completed,
+                )
+            )
+        )
+        total_completed = count_result.scalar() or 0
+
+        # Update TASKS achievements
+        ach_result = await db.execute(
+            select(Achievement).where(
+                and_(
+                    Achievement.achievement_type == AchievementType.TASKS,
+                    Achievement.is_active == True,
+                )
+            )
+        )
+        for achievement in ach_result.scalars().all():
+            ua_result = await db.execute(
+                select(UserAchievement).where(
+                    and_(
+                        UserAchievement.user_id == current_user.id,
+                        UserAchievement.achievement_id == achievement.id,
+                    )
+                )
+            )
+            user_ach = ua_result.scalar_one_or_none()
+
+            if not user_ach:
+                user_ach = UserAchievement(
+                    user_id=current_user.id,
+                    achievement_id=achievement.id,
+                    progress=0,
+                    unlocked=False,
+                )
+                db.add(user_ach)
+
+            if not user_ach.unlocked and user_ach.progress < total_completed:
+                user_ach.progress = total_completed
+                if user_ach.progress >= achievement.criteria_count:
+                    user_ach.unlocked = True
+                    user_ach.unlocked_at = __import__('datetime').datetime.now(timezone.utc)
+                    if pet:
+                        pet.xp += achievement.xp_reward
+                        pet.check_level_up()
+                    xp_earned += achievement.xp_reward
+                    achievements_unlocked.append({
+                        "code": achievement.code,
+                        "title": achievement.title,
+                        "emoji": achievement.emoji,
+                        "xp_reward": achievement.xp_reward,
+                    })
+
+        await db.commit()
+        if pet:
+            await db.refresh(pet)
+
+    except Exception:
+        import traceback
+        traceback.print_exc()
+
     return {
         **task.__dict__,
         "category_name": task.category.name if task.category else None,
+        "xp_earned": xp_earned,
+        "achievements_unlocked": achievements_unlocked,
     }
 
 
