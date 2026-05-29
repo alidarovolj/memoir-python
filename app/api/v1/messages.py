@@ -11,7 +11,7 @@ from uuid import UUID
 from app.db.session import get_db
 from app.api.deps import get_current_user
 from app.models.user import User
-from app.models.message import Message
+from app.models.message import Message, MessageType
 from app.models.friendship import Friendship, FriendshipStatus
 from app.schemas.message import MessageCreate, MessageOut, MessageListResponse, WebSocketMessage
 from app.services.notification_service import NotificationService
@@ -19,6 +19,44 @@ from sqlalchemy import or_, and_
 from pydantic import BaseModel
 
 router = APIRouter()
+
+
+def _message_type_value(raw) -> str:
+    if isinstance(raw, MessageType):
+        return raw.value
+    return str(raw or MessageType.TEXT.value)
+
+
+def message_preview(content: str, message_type: str) -> str:
+    if message_type == MessageType.GIF.value:
+        return "GIF"
+    if message_type == MessageType.IMAGE.value:
+        return content.strip() if content.strip() else "Photo"
+    return content
+
+
+def serialize_message(message: Message, sender: User | None = None) -> dict:
+    msg_type = _message_type_value(message.message_type)
+    return {
+        "id": str(message.id),
+        "sender_id": str(message.sender_id),
+        "receiver_id": str(message.receiver_id),
+        "content": message.content,
+        "message_type": msg_type,
+        "media_url": message.media_url,
+        "is_read": message.is_read,
+        "read_at": message.read_at.isoformat() if message.read_at else None,
+        "created_at": message.created_at.isoformat(),
+        "updated_at": message.updated_at.isoformat(),
+        "sender": {
+            "id": str(sender.id),
+            "username": sender.username,
+            "first_name": sender.first_name,
+            "last_name": sender.last_name,
+            "avatar_url": sender.avatar_url,
+        } if sender else None,
+    }
+
 
 # WebSocket connections manager
 class ConnectionManager:
@@ -126,7 +164,9 @@ async def websocket_endpoint(
                         message = Message(
                             sender_id=user_id,
                             receiver_id=ws_message.receiver_id,
-                            content=ws_message.content
+                            content=ws_message.content or "",
+                            message_type=ws_message.message_type.value,
+                            media_url=ws_message.media_url,
                         )
                         db.add(message)
                         await db.commit()
@@ -142,23 +182,7 @@ async def websocket_endpoint(
                         # Send to receiver
                         message_dict = {
                             "type": "message",
-                            "message": {
-                                "id": str(message.id),
-                                "sender_id": str(message.sender_id),
-                                "receiver_id": str(message.receiver_id),
-                                "content": message.content,
-                                "is_read": message.is_read,
-                                "read_at": message.read_at.isoformat() if message.read_at else None,
-                                "created_at": message.created_at.isoformat(),
-                                "updated_at": message.updated_at.isoformat(),
-                                "sender": {
-                                    "id": str(sender.id),
-                                    "username": sender.username,
-                                    "first_name": sender.first_name,
-                                    "last_name": sender.last_name,
-                                    "avatar_url": sender.avatar_url,
-                                } if sender else None
-                            }
+                            "message": serialize_message(message, sender),
                         }
                         
                         # Send to receiver
@@ -190,7 +214,10 @@ async def websocket_endpoint(
                                 await NotificationService.send_message_notification(
                                     fcm_token=receiver.fcm_token,
                                     sender_name=sender_name,
-                                    message_preview=message.content,
+                                    message_preview=message_preview(
+                                        message.content,
+                                        _message_type_value(message.message_type),
+                                    ),
                                     sender_id=str(user_id),
                                 )
                                 print(f"✅ [WebSocket] Push notification sent to offline receiver")
@@ -464,7 +491,9 @@ async def send_message(
     message = Message(
         sender_id=current_user.id,
         receiver_id=message_data.receiver_id,
-        content=message_data.content
+        content=message_data.content,
+        message_type=message_data.message_type.value,
+        media_url=message_data.media_url,
     )
     db.add(message)
     await db.commit()
@@ -494,7 +523,10 @@ async def send_message(
             await NotificationService.send_message_notification(
                 fcm_token=receiver.fcm_token,
                 sender_name=sender_name,
-                message_preview=message_data.content,
+                message_preview=message_preview(
+                    message_data.content,
+                    message_data.message_type.value,
+                ),
                 sender_id=str(current_user.id),
             )
     

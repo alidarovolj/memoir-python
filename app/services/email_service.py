@@ -26,15 +26,22 @@ class EmailService:
         """
         try:
             logger.info(f"📧 [EMAIL] Sending verification code to {email}")
-            
-            # TEST MODE: Just log the code instead of sending email
+
+            smtp_ready = bool(settings.SMTP_USER and settings.SMTP_PASSWORD)
             if settings.EMAIL_TEST_MODE:
-                logger.warning(f"🧪 [EMAIL] TEST MODE - Email not sent")
+                logger.warning("🧪 [EMAIL] TEST MODE - Email not sent")
                 logger.warning(f"📝 [EMAIL] Code: {code} for {email}")
                 return {
                     "success": True,
                     "message_id": "test-mode-id",
-                    "message": "Email sent (test mode)"
+                    "message": "Email sent (test mode)",
+                }
+
+            if not smtp_ready:
+                logger.error("❌ [EMAIL] SMTP credentials are not configured")
+                return {
+                    "success": False,
+                    "error": "SMTP credentials are not configured",
                 }
             
             # Create email message
@@ -143,8 +150,9 @@ class EmailService:
             
             # Login if credentials provided
             if settings.SMTP_USER and settings.SMTP_PASSWORD:
+                smtp_password = settings.SMTP_PASSWORD.replace(" ", "")
                 logger.info(f"📡 [EMAIL] Authenticating as {settings.SMTP_USER}")
-                server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+                server.login(settings.SMTP_USER, smtp_password)
             
             # Send email
             server.send_message(message)

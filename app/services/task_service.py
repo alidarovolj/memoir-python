@@ -15,6 +15,31 @@ class TaskService:
     """Service for task operations"""
 
     @staticmethod
+    def _due_date_filter(date: str):
+        """Filter tasks that belong to a specific calendar day."""
+        filter_date = datetime.strptime(date, "%Y-%m-%d").date()
+        day_start = datetime.combine(filter_date, datetime.min.time())
+        day_end = datetime.combine(filter_date + timedelta(days=1), datetime.min.time())
+        return or_(
+            and_(
+                Task.is_recurring == False,
+                Task.due_date >= day_start,
+                Task.due_date < day_end,
+            ),
+            and_(
+                Task.parent_task_id.isnot(None),
+                Task.due_date >= day_start,
+                Task.due_date < day_end,
+            ),
+            and_(
+                Task.is_recurring == True,
+                Task.parent_task_id.is_(None),
+                Task.due_date >= day_start,
+                Task.due_date < day_end,
+            ),
+        )
+
+    @staticmethod
     async def get_tasks(
         db: AsyncSession,
         user_id: UUID,
@@ -42,24 +67,7 @@ class TaskService:
         
         # Filter by date - for recurring tasks, check due_date
         if date:
-            from datetime import datetime
-            filter_date = datetime.strptime(date, "%Y-%m-%d").date()
-            query = query.where(
-                or_(
-                    # Non-recurring tasks: match due_date
-                    and_(
-                        Task.is_recurring == False,
-                        Task.due_date >= datetime.combine(filter_date, datetime.min.time()),
-                        Task.due_date < datetime.combine(filter_date + timedelta(days=1), datetime.min.time())
-                    ),
-                    # Recurring task instances: match due_date
-                    and_(
-                        Task.parent_task_id.isnot(None),
-                        Task.due_date >= datetime.combine(filter_date, datetime.min.time()),
-                        Task.due_date < datetime.combine(filter_date + timedelta(days=1), datetime.min.time())
-                    )
-                )
-            )
+            query = query.where(TaskService._due_date_filter(date))
 
         # Order by: urgent first, then by due_date, then by created_at
         query = query.order_by(
@@ -79,24 +87,7 @@ class TaskService:
         if category_id:
             count_query = count_query.where(Task.category_id == category_id)
         if date:
-            from datetime import datetime
-            filter_date = datetime.strptime(date, "%Y-%m-%d").date()
-            count_query = count_query.where(
-                or_(
-                    # Non-recurring tasks: match due_date
-                    and_(
-                        Task.is_recurring == False,
-                        Task.due_date >= datetime.combine(filter_date, datetime.min.time()),
-                        Task.due_date < datetime.combine(filter_date + timedelta(days=1), datetime.min.time())
-                    ),
-                    # Recurring task instances: match due_date
-                    and_(
-                        Task.parent_task_id.isnot(None),
-                        Task.due_date >= datetime.combine(filter_date, datetime.min.time()),
-                        Task.due_date < datetime.combine(filter_date + timedelta(days=1), datetime.min.time())
-                    )
-                )
-            )
+            count_query = count_query.where(TaskService._due_date_filter(date))
 
         count_result = await db.execute(count_query)
         total = len(count_result.scalars().all())
@@ -164,6 +155,10 @@ class TaskService:
         db.add(task)
         await db.commit()
         await db.refresh(task)
+
+        from app.services.space_sync_task_service import SpaceSyncTaskService
+
+        await SpaceSyncTaskService.on_task_created(db, user_id, task)
 
         return task
 

@@ -284,6 +284,153 @@ class NotificationService:
             return False
 
     @staticmethod
+    async def send_space_sync_request_notification(
+        fcm_token: str,
+        actor_name: str,
+        actor_id: str,
+        sync_id: str,
+    ) -> bool:
+        """Send push when a task sync request is received."""
+        try:
+            message = messaging.Message(
+                notification=messaging.Notification(
+                    title=actor_name,
+                    body="wants to sync tasks with you",
+                ),
+                data={
+                    'type': 'space_sync_request',
+                    'actor_id': actor_id,
+                    'actor_name': actor_name,
+                    'sync_id': sync_id,
+                },
+                token=fcm_token,
+                android=messaging.AndroidConfig(
+                    priority='high',
+                    notification=messaging.AndroidNotification(
+                        icon='notification_icon',
+                        color='#6366F1',
+                        sound='default',
+                        channel_id='memoir_social',
+                    ),
+                ),
+                apns=messaging.APNSConfig(
+                    payload=messaging.APNSPayload(
+                        aps=messaging.Aps(
+                            sound='default',
+                            badge=1,
+                        ),
+                    ),
+                    headers={'apns-priority': '10'},
+                ),
+            )
+            response = messaging.send(message)
+            logger.info(f"✅ Space sync request notification sent: {actor_name} → {response}")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Failed to send space sync request notification: {e}")
+            return False
+
+    @staticmethod
+    async def send_space_sync_accepted_notification(
+        fcm_token: str,
+        actor_name: str,
+        actor_id: str,
+        sync_id: str,
+    ) -> bool:
+        """Send push when a task sync request is accepted."""
+        try:
+            message = messaging.Message(
+                notification=messaging.Notification(
+                    title=actor_name,
+                    body="accepted your task sync request",
+                ),
+                data={
+                    'type': 'space_sync_accepted',
+                    'actor_id': actor_id,
+                    'actor_name': actor_name,
+                    'sync_id': sync_id,
+                },
+                token=fcm_token,
+                android=messaging.AndroidConfig(
+                    priority='high',
+                    notification=messaging.AndroidNotification(
+                        icon='notification_icon',
+                        color='#6366F1',
+                        sound='default',
+                        channel_id='memoir_social',
+                    ),
+                ),
+                apns=messaging.APNSConfig(
+                    payload=messaging.APNSPayload(
+                        aps=messaging.Aps(
+                            sound='default',
+                            badge=1,
+                        ),
+                    ),
+                    headers={'apns-priority': '10'},
+                ),
+            )
+            response = messaging.send(message)
+            logger.info(f"✅ Space sync accepted notification sent: {actor_name} → {response}")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Failed to send space sync accepted notification: {e}")
+            return False
+
+    @staticmethod
+    async def send_space_sync_task_invite_notification(
+        fcm_token: str,
+        actor_name: str,
+        actor_id: str,
+        invite_id: str,
+        task_id: str,
+        task_title: str,
+    ) -> bool:
+        """Send push when a sync partner shares a new task."""
+        try:
+            message = messaging.Message(
+                notification=messaging.Notification(
+                    title=actor_name,
+                    body=f"shared a task with you: {task_title}",
+                ),
+                data={
+                    "type": "space_sync_task_invite",
+                    "actor_id": actor_id,
+                    "actor_name": actor_name,
+                    "invite_id": invite_id,
+                    "task_id": task_id,
+                    "task_title": task_title,
+                },
+                token=fcm_token,
+                android=messaging.AndroidConfig(
+                    priority="high",
+                    notification=messaging.AndroidNotification(
+                        icon="notification_icon",
+                        color="#6366F1",
+                        sound="default",
+                        channel_id="memoir_social",
+                    ),
+                ),
+                apns=messaging.APNSConfig(
+                    payload=messaging.APNSPayload(
+                        aps=messaging.Aps(
+                            sound="default",
+                            badge=1,
+                        ),
+                    ),
+                    headers={"apns-priority": "10"},
+                ),
+            )
+            response = messaging.send(message)
+            logger.info(
+                f"✅ Space sync task invite notification sent: {task_title} → {response}"
+            )
+            return True
+        except Exception as e:
+            logger.error(f"❌ Failed to send space sync task invite notification: {e}")
+            return False
+
+    @staticmethod
     async def test_notification(fcm_token: str) -> bool:
         """
         Send test notification to verify FCM token

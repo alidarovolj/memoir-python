@@ -9,6 +9,7 @@ from app.models.user import User
 from app.models.daily_prompt import PromptCategory
 from app.schemas.daily_prompt import (
     DailyPrompt,
+    DailyPromptToday,
     DailyPromptCreate,
     DailyPromptUpdate,
     PromptAnswerCreate,
@@ -22,7 +23,7 @@ from app.core.exceptions import NotFoundError
 router = APIRouter()
 
 
-@router.get("/today", response_model=DailyPrompt)
+@router.get("/today", response_model=DailyPromptToday)
 async def get_prompt_of_the_day(
     category: Optional[PromptCategory] = Query(None, description="Filter by category"),
     db: AsyncSession = Depends(get_db),
@@ -41,8 +42,26 @@ async def get_prompt_of_the_day(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No active prompts available",
         )
-    
-    return prompt
+
+    answer = await DailyPromptService.get_today_answer(
+        db,
+        user_id=str(current_user.id),
+        prompt=prompt,
+    )
+
+    return DailyPromptToday(
+        id=prompt.id,
+        prompt_text=prompt.prompt_text,
+        prompt_icon=prompt.prompt_icon,
+        category=prompt.category.value if hasattr(prompt.category, "value") else prompt.category,
+        prompt_type=prompt.prompt_type.value if hasattr(prompt.prompt_type, "value") else prompt.prompt_type,
+        is_active=prompt.is_active,
+        order_index=prompt.order_index,
+        created_at=prompt.created_at,
+        updated_at=prompt.updated_at,
+        is_answered_today=answer is not None,
+        answer=answer,
+    )
 
 
 @router.post("/answer", response_model=PromptAnswerResponse)
@@ -65,10 +84,14 @@ async def answer_prompt(
         
         # Create memory from answer
         memory_data = MemoryCreate(
-            title=f"{prompt.prompt_icon} {prompt.prompt_text}",
+            title=DailyPromptService.build_prompt_memory_title(prompt),
             content=answer_data.answer,
             category_id=None,  # Can be categorized by AI later
-            source_type="manual",
+            source_type="text",
+            memory_metadata={
+                "daily_prompt_id": str(prompt.id),
+                "source": "daily_prompt",
+            },
         )
         
         memory = await MemoryService.create_memory(

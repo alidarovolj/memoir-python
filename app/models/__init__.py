@@ -18,6 +18,11 @@ from app.models.memory_share import memory_shares, MemoryShareHistory
 from app.models.memory_reactions import MemoryReaction, MemoryComment, ReactionType
 from app.models.group_challenge import GroupChallenge, GroupChallengeInvite, group_challenge_members
 from app.models.message import Message
+from app.models.space_sync import SpaceSync, SpaceSyncStatus
+from app.models.space_sync_task_invite import (
+    SpaceSyncTaskInvite,
+    SpaceSyncTaskInviteStatus,
+)
 
 __all__ = [
     "User",
@@ -48,6 +53,10 @@ __all__ = [
     "GroupChallengeInvite",
     "group_challenge_members",
     "Message",
+    "SpaceSync",
+    "SpaceSyncStatus",
+    "SpaceSyncTaskInvite",
+    "SpaceSyncTaskInviteStatus",
 ]
 
 

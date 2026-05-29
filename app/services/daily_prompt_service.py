@@ -1,11 +1,13 @@
 """Daily Prompt service"""
 from typing import List, Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, time
+from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
 import random
 
 from app.models.daily_prompt import DailyPrompt, PromptCategory
+from app.models.memory import Memory
 from app.schemas.daily_prompt import DailyPromptCreate, DailyPromptUpdate
 from app.core.exceptions import NotFoundError
 
@@ -85,6 +87,39 @@ class DailyPromptService:
         selected_prompt = random.choice(prompts)
         
         return selected_prompt
+
+    @staticmethod
+    def build_prompt_memory_title(prompt: DailyPrompt) -> str:
+        """Canonical memory title for a daily prompt answer."""
+        return f"{prompt.prompt_icon} {prompt.prompt_text}"
+
+    @staticmethod
+    async def get_today_answer(
+        db: AsyncSession,
+        user_id: str,
+        prompt: DailyPrompt,
+    ) -> Optional[str]:
+        """Return saved answer if the user already answered today's prompt."""
+        today = datetime.now(timezone.utc).date()
+        # memories.created_at is stored as naive UTC
+        start_of_day = datetime.combine(today, time.min)
+        title = DailyPromptService.build_prompt_memory_title(prompt)
+
+        query = (
+            select(Memory)
+            .where(
+                and_(
+                    Memory.user_id == UUID(user_id),
+                    Memory.title == title,
+                    Memory.created_at >= start_of_day,
+                )
+            )
+            .order_by(Memory.created_at.desc())
+            .limit(1)
+        )
+        result = await db.execute(query)
+        memory = result.scalar_one_or_none()
+        return memory.content if memory else None
     
     @staticmethod
     async def get_prompt_by_id(

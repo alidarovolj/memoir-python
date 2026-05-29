@@ -40,6 +40,12 @@ class DailyPrompt(DailyPromptBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+class DailyPromptToday(DailyPrompt):
+    """Today's prompt with completion status for the current user"""
+    is_answered_today: bool = False
+    answer: Optional[str] = None
+
+
 class PromptAnswerCreate(BaseModel):
     """Schema for answering a prompt"""
     prompt_id: UUID = Field(..., description="ID of the prompt being answered")

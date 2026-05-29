@@ -49,9 +49,17 @@ async def send_email_verification_code(
         
         if not result.get("success"):
             logger.error(f"❌ [EMAIL_AUTH] Failed to send email: {result.get('error')}")
+            error = result.get("error") or "Unknown email error"
+            if "authentication failed" in error.lower():
+                detail = (
+                    "Email provider rejected SMTP credentials. "
+                    "Update SMTP_PASSWORD in backend/.env with a fresh Gmail App Password."
+                )
+            else:
+                detail = f"Failed to send email: {error}"
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to send email: {result.get('error')}"
+                detail=detail,
             )
         
         logger.info(f"✅ [EMAIL_AUTH] Code sent successfully to {email}")
@@ -62,11 +70,13 @@ async def send_email_verification_code(
             "expires_in": EmailVerificationService.CODE_TTL
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"❌ [EMAIL_AUTH] Error sending code: {e}")
+        logger.error(f"❌ [EMAIL_AUTH] Error sending code: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to send verification code"
+            detail="Failed to send verification code",
         )
 
 

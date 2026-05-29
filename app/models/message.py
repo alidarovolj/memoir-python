@@ -1,11 +1,18 @@
 """Message model for direct messaging between friends"""
 import uuid
+import enum
 from datetime import datetime
-from sqlalchemy import Column, String, Text, DateTime, ForeignKey, Boolean, Integer
+from sqlalchemy import Column, String, Text, DateTime, ForeignKey, Boolean
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
 from app.db.base import Base
+
+
+class MessageType(str, enum.Enum):
+    TEXT = "text"
+    IMAGE = "image"
+    GIF = "gif"
 
 
 class Message(Base):
@@ -21,7 +28,9 @@ class Message(Base):
     receiver_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     
     # Message content
-    content = Column(Text, nullable=False)
+    content = Column(Text, nullable=False, default="")
+    message_type = Column(String(20), nullable=False, default=MessageType.TEXT.value, server_default="text")
+    media_url = Column(String(2048), nullable=True)
     
     # Read status
     is_read = Column(Boolean, default=False, nullable=False)

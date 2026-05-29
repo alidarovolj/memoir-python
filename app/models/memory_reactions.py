@@ -1,5 +1,5 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Enum
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
+from sqlalchemy.dialects.postgresql import UUID, ENUM
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import enum
@@ -28,9 +28,14 @@ class MemoryReaction(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     
     reaction_type = Column(
-        Enum(ReactionType),
+        ENUM(
+            ReactionType,
+            name="reactiontype",
+            create_type=False,
+            values_callable=lambda obj: [e.value for e in obj],
+        ),
         nullable=False,
-        default=ReactionType.LIKE
+        default=ReactionType.LIKE,
     )
     
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

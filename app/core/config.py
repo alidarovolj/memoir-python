@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     GOOGLE_SEARCH_KEY: str = ""  # Google Custom Search API
     GOOGLE_SEARCH_CX: str = ""  # Custom Search Engine ID
     SPOONACULAR_KEY: str = ""  # Spoonacular API (recipes)
+    GIPHY_API_KEY: str = ""  # Giphy GIF search for chat
     
     # Mobizon (Kazakhstan SMS service)
     MOBIZON_API_KEY: str = ""
@@ -66,6 +67,15 @@ class Settings(BaseSettings):
     # Firebase Cloud Messaging
     FIREBASE_CREDENTIALS_PATH: str = ""  # Path to Firebase service account JSON file
     
+    # Stripe (test mode — https://dashboard.stripe.com/test/apikeys)
+    STRIPE_SECRET_KEY: str = ""
+    STRIPE_PUBLISHABLE_KEY: str = ""
+    STRIPE_WEBHOOK_SECRET: str = ""
+    STRIPE_CURRENCY: str = "usd"
+    STRIPE_TEST_AMOUNT_CENTS: int = 499
+    STRIPE_SUCCESS_URL: str = "http://localhost:8000/api/v1/payments/return?status=success"
+    STRIPE_CANCEL_URL: str = "http://localhost:8000/api/v1/payments/return?status=cancel"
+
     # CORS
     CORS_ORIGINS: str = "http://localhost:3000,http://localhost:8080"
     
