@@ -94,3 +94,6 @@ dump.rdb
 
 # Firebase credentials
 firebase-credentials.json
+
+# User-uploaded media (local dev only)
+uploads/
