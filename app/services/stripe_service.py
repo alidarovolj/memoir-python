@@ -29,7 +29,19 @@ class StripeService:
 
     @staticmethod
     def get_publishable_key() -> str:
-        return settings.STRIPE_PUBLISHABLE_KEY or ""
+        return (settings.STRIPE_PUBLISHABLE_KEY or "").strip()
+
+    @staticmethod
+    def _ensure_publishable_key() -> None:
+        pk = StripeService.get_publishable_key()
+        if not pk:
+            raise StripeNotConfiguredError(
+                "Stripe publishable key is missing. Set STRIPE_PUBLISHABLE_KEY in backend/.env"
+            )
+        if not pk.startswith("pk_"):
+            raise StripeNotConfiguredError(
+                "STRIPE_PUBLISHABLE_KEY must start with pk_"
+            )
 
     @staticmethod
     def create_test_checkout_session(
@@ -81,4 +93,35 @@ class StripeService:
         return {
             "checkout_url": session.url or "",
             "session_id": session.id,
+        }
+
+    @staticmethod
+    def create_test_payment_intent(
+        *,
+        user_id: str,
+        amount_cents: int | None = None,
+    ) -> dict[str, str]:
+        """Create a PaymentIntent for in-app Payment Sheet (flutter_stripe)."""
+        StripeService._ensure_configured()
+        StripeService._ensure_publishable_key()
+
+        cents = amount_cents or settings.STRIPE_TEST_AMOUNT_CENTS
+        intent = stripe.PaymentIntent.create(
+            amount=cents,
+            currency=settings.STRIPE_CURRENCY,
+            payment_method_types=["card"],
+            metadata={
+                "user_id": user_id,
+                "type": "test_payment_intent",
+            },
+        )
+        logger.info(
+            "Stripe payment intent created user_id=%s intent_id=%s",
+            user_id,
+            intent.id,
+        )
+        return {
+            "client_secret": intent.client_secret or "",
+            "payment_intent_id": intent.id,
+            "publishable_key": StripeService.get_publishable_key(),
         }

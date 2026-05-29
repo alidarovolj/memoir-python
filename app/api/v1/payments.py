@@ -7,6 +7,7 @@ from app.models.user import User
 from app.schemas.payment import (
     CheckoutSessionRequest,
     CheckoutSessionResponse,
+    PaymentIntentResponse,
     StripeConfigResponse,
 )
 from app.services.stripe_service import StripeNotConfiguredError, StripeService
@@ -64,6 +65,40 @@ async def create_test_checkout(
         )
 
     return CheckoutSessionResponse(**result)
+
+
+@router.post("/payment-intent/test", response_model=PaymentIntentResponse)
+async def create_test_payment_intent(
+    body: CheckoutSessionRequest | None = None,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Create a PaymentIntent for the native Payment Sheet (flutter_stripe).
+    Use test card 4242 4242 4242 4242 in the app sheet.
+    """
+    try:
+        result = StripeService.create_test_payment_intent(
+            user_id=str(current_user.id),
+            amount_cents=body.amount_cents if body else None,
+        )
+    except StripeNotConfiguredError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Stripe error: {exc}",
+        ) from exc
+
+    if not result["client_secret"]:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Stripe did not return a client secret",
+        )
+
+    return PaymentIntentResponse(**result)
 
 
 @router.get("/return", response_class=HTMLResponse)
